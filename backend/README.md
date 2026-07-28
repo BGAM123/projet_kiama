@@ -12,13 +12,13 @@ fonctionnalités sont vérifiables via Swagger, Postman ou `curl`.
 
 - [x] **Bloc 1 — Socle** : structure Maven multi-module, `docker-compose.yml`,
       migrations Flyway `V1` (schéma) et `V2` (rôles / permissions / compte admin).
-- [ ] **Bloc 2 — Sécurité** : JWT RS256, RBAC, endpoints `/auth`, `/users`, `/roles`.
-- [ ] **Bloc 3 — Référentiels** : Catégories, Documents Types (CRUD, versionnement).
-- [ ] **Bloc 4 — Extraction** : upload, MIME, parsers DOCX/PDF, arbre JSON.
-- [ ] **Bloc 5 — IA** : adaptateurs Stratégie, Prompt Builder, RAG pgvector, validator.
-- [ ] **Bloc 6 — Génération** : conversations, orchestration, streaming SSE.
-- [ ] **Bloc 7 — Export** : DOCX / PDF / Markdown.
-- [ ] **Bloc 8 — Transverses** : dashboard, notifications, audit, config IA.
+- [x] **Bloc 2 — Sécurité** : JWT RS256, RBAC, endpoints `/auth`, `/users`, `/roles`.
+- [x] **Bloc 3 — Référentiels** : Catégories, Documents Types (CRUD, versionnement).
+- [x] **Bloc 4 — Extraction** : upload, MIME, parsers DOCX/PDF, arbre JSON.
+- [x] **Bloc 5 — IA** : adaptateurs Stratégie, Prompt Builder, RAG pgvector, validator.
+- [x] **Bloc 6 — Génération** : conversations, orchestration, streaming SSE.
+- [x] **Bloc 7 — Export** : DOCX / PDF / Markdown.
+- [x] **Bloc 8 — Transverses** : dashboard, notifications, audit, config IA.
 - [ ] **Bloc 9 — Finalisation** : durcissement, tests, Postman, docs.
 
 ---
