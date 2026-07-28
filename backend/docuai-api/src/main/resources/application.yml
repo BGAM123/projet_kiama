@@ -1,0 +1,135 @@
+spring:
+  application:
+    name: docuai
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:dev}
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/docuai}
+    username: ${SPRING_DATASOURCE_USERNAME:docuai}
+    password: ${SPRING_DATASOURCE_PASSWORD:docuai}
+    hikari:
+      maximum-pool-size: 10
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        jdbc.time_zone: UTC
+        format_sql: false
+    open-in-view: false
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+  data:
+    redis:
+      host: ${SPRING_DATA_REDIS_HOST:localhost}
+      port: ${SPRING_DATA_REDIS_PORT:6379}
+  servlet:
+    multipart:
+      max-file-size: 25MB
+      max-request-size: 260MB
+
+server:
+  port: 8080
+  error:
+    include-message: always
+    include-binding-errors: always
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      show-details: when-authorized
+  prometheus:
+    metrics:
+      export:
+        enabled: true
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    operationsSorter: alpha
+    tagsSorter: alpha
+
+docuai:
+  jwt:
+    issuer: ${DOCUAI_JWT_ISSUER:docuai}
+    private-key: ${DOCUAI_JWT_PRIVATE_KEY:}
+    public-key: ${DOCUAI_JWT_PUBLIC_KEY:}
+    access-ttl-seconds: 900
+    refresh-ttl-seconds: 604800
+  admin:
+    bootstrap-password: ${DOCUAI_ADMIN_BOOTSTRAP_PASSWORD:ChangeMe!2026}
+  minio:
+    endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
+    access-key: ${MINIO_ACCESS_KEY:docuai}
+    secret-key: ${MINIO_SECRET_KEY:docuai-minio-secret}
+    presigned-url-ttl-seconds: 900
+    bucket-sources:    ${MINIO_BUCKET_SOURCES:docuai-sources}
+    bucket-references: ${MINIO_BUCKET_REFERENCES:docuai-references}
+    bucket-exports:    ${MINIO_BUCKET_EXPORTS:docuai-exports}
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY:}
+    anthropic:
+      api-key: ${ANTHROPIC_API_KEY:}
+    ollama:
+      base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
+    gemini:
+      api-key: ${GEMINI_API_KEY:}
+    mistral:
+      api-key: ${MISTRAL_API_KEY:}
+    deepseek:
+      api-key: ${DEEPSEEK_API_KEY:}
+  upload:
+    max-size-mb: 25
+    allowed-mime-types:
+      - application/vnd.openxmlformats-officedocument.wordprocessingml.document
+      - application/pdf
+  generation:
+    max-reference-documents: 10
+    section-retry-attempts: 2
+
+resilience4j:
+  retry:
+    instances:
+      ai-provider:
+        max-attempts: 3
+        wait-duration: 500ms
+        exponential-backoff-multiplier: 2
+      extraction:
+        max-attempts: 3
+        wait-duration: 300ms
+        exponential-backoff-multiplier: 2
+  circuitbreaker:
+    instances:
+      ai-provider:
+        sliding-window-size: 10
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+
+logging:
+  level:
+    root: INFO
+    com.docuai: DEBUG
+    org.springframework.security: INFO
+
+---
+spring:
+  config:
+    activate:
+      on-profile: prod
+  jpa:
+    properties:
+      hibernate:
+        format_sql: false
+logging:
+  level:
+    root: INFO
+    com.docuai: INFO

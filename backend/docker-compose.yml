@@ -1,0 +1,115 @@
+services:
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: docuai-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-docuai}
+      POSTGRES_USER: ${POSTGRES_USER:-docuai}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-docuai}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-docuai} -d ${POSTGRES_DB:-docuai}" ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: docuai-redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    container_name: docuai-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-docuai}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-docuai-minio-secret}
+    ports:
+      - "${MINIO_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:9000/minio/health/live" ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: docuai-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c " mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-docuai} ${MINIO_ROOT_PASSWORD:-docuai-minio-secret} && mc mb --ignore-existing local/${MINIO_BUCKET_SOURCES:-docuai-sources} && mc mb --ignore-existing local/${MINIO_BUCKET_REFERENCES:-docuai-references} && mc mb --ignore-existing local/${MINIO_BUCKET_EXPORTS:-docuai-exports} && mc anonymous set none local/${MINIO_BUCKET_SOURCES:-docuai-sources} && mc anonymous set none local/${MINIO_BUCKET_REFERENCES:-docuai-references} && mc anonymous set none local/${MINIO_BUCKET_EXPORTS:-docuai-exports} "
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: docuai-backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-dev}
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-docuai}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-docuai}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-docuai}
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+      SPRING_MAIL_HOST: mailhog
+      SPRING_MAIL_PORT: 1025
+      SPRING_MAIL_PROPERTIES_MAIL_SMTP_AUTH: "false"
+      SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_ENABLE: "false"
+      MINIO_URL: http://minio:9000
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-docuai}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-docuai-minio-secret}
+      MINIO_BUCKET_NAME: ${MINIO_BUCKET_SOURCES:-docuai-sources}
+      MINIO_BUCKET_SOURCES: ${MINIO_BUCKET_SOURCES:-docuai-sources}
+      MINIO_BUCKET_REFERENCES: ${MINIO_BUCKET_REFERENCES:-docuai-references}
+      MINIO_BUCKET_EXPORTS: ${MINIO_BUCKET_EXPORTS:-docuai-exports}
+      DOCUAI_JWT_ISSUER: ${DOCUAI_JWT_ISSUER:-docuai}
+      DOCUAI_JWT_PRIVATE_KEY: ${DOCUAI_JWT_PRIVATE_KEY:-}
+      DOCUAI_JWT_PUBLIC_KEY: ${DOCUAI_JWT_PUBLIC_KEY:-}
+      DOCUAI_ADMIN_BOOTSTRAP_PASSWORD: ${DOCUAI_ADMIN_BOOTSTRAP_PASSWORD:-ChangeMe!2026}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+    ports:
+      - "${BACKEND_PORT:-8080}:8080"
+    restart: unless-stopped
+
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: docuai-mailhog
+    ports:
+      - "1025:1025" # SMTP
+      - "8025:8025" # Interface Web
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:
