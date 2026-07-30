@@ -25,10 +25,25 @@ spring:
     redis:
       host: ${SPRING_DATA_REDIS_HOST:localhost}
       port: ${SPRING_DATA_REDIS_PORT:6379}
+  mail:
+    host: ${SPRING_MAIL_HOST:localhost}
+    port: ${SPRING_MAIL_PORT:1025}
+    properties:
+      mail:
+        smtp:
+          auth: ${SPRING_MAIL_PROPERTIES_MAIL_SMTP_AUTH:false}
+          starttls:
+            enable: ${SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_ENABLE:false}
   servlet:
     multipart:
       max-file-size: 25MB
       max-request-size: 260MB
+  jackson:
+    # LocalDateTime en chaîne ISO-8601, pas en tableau [année,mois,jour,...]
+    # (comportement par défaut du module jsr310) — indispensable pour tout
+    # client JSON standard (frontend, Postman, curl).
+    serialization:
+      write-dates-as-timestamps: false
 
 server:
   port: 8080
@@ -60,12 +75,24 @@ springdoc:
 docuai:
   jwt:
     issuer: ${DOCUAI_JWT_ISSUER:docuai}
+    # PEM PKCS#8 / X.509 en une ligne, "\n" littéraux à la place des retours à
+    # la ligne — voir README (génération via `openssl genpkey`) et
+    # PemKeyReader (docuai-security) pour le format exact attendu.
     private-key: ${DOCUAI_JWT_PRIVATE_KEY:}
     public-key: ${DOCUAI_JWT_PUBLIC_KEY:}
-    access-ttl-seconds: 900
-    refresh-ttl-seconds: 604800
+    access-ttl-seconds: ${DOCUAI_JWT_ACCESS_TTL_SECONDS:900}
+    refresh-ttl-seconds: ${DOCUAI_JWT_REFRESH_TTL_SECONDS:604800}
   admin:
     bootstrap-password: ${DOCUAI_ADMIN_BOOTSTRAP_PASSWORD:ChangeMe!2026}
+  mail:
+    # Adresse d'expéditeur de l'e-mail de bienvenue (UserService#create ->
+    # UserCreatedEvent -> UserWelcomeEmailListener -> MailService). Reçu par
+    # Mailhog en dev (http://localhost:8025), un vrai relais SMTP en prod.
+    from: ${DOCUAI_MAIL_FROM:no-reply@docuai.local}
+  app:
+    # Base de l'URL frontend, utilisée pour construire le lien de connexion
+    # dans l'e-mail de bienvenue.
+    frontend-url: ${DOCUAI_FRONTEND_URL:http://localhost:3000}
   minio:
     endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
     access-key: ${MINIO_ACCESS_KEY:docuai}
@@ -92,6 +119,10 @@ docuai:
     allowed-mime-types:
       - application/vnd.openxmlformats-officedocument.wordprocessingml.document
       - application/pdf
+  clamav:
+    enabled: ${DOCUAI_CLAMAV_ENABLED:false}
+    host: ${DOCUAI_CLAMAV_HOST:localhost}
+    port: ${DOCUAI_CLAMAV_PORT:3310}
   generation:
     max-reference-documents: 10
     section-retry-attempts: 2

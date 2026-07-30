@@ -1,33 +1,7 @@
-# --- Java / Maven -----------------------------------------------------------
 target/
 *.class
-*.jar
-*.war
-!/.mvn/wrapper/maven-wrapper.jar
-.mvn/wrapper/maven-wrapper.properties
-
-# --- IDE --------------------------------------------------------------------
 .idea/
 *.iml
 .vscode/
-.settings/
-.project
-.classpath
-.factorypath
-
-# --- OS ---------------------------------------------------------------------
-.DS_Store
-Thumbs.db
-
-# --- Env / secrets ----------------------------------------------------------
 .env
-.env.local
 *.pem
-!jwt_public.example.pem
-
-# --- Docker ------------------------------------------------------------------
-docker-compose.override.yml
-
-# --- Logs --------------------------------------------------------------------
-logs/
-*.log

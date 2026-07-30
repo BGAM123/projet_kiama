@@ -1,68 +1,106 @@
 package com.docuai.security.jwt;
 
+import com.docuai.security.config.JwtKeyProperties;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
-import io.jsonwebtoken.security.Keys;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Component;
 
-import javax.crypto.SecretKey;
+import java.security.interfaces.RSAPrivateKey;
+import java.security.interfaces.RSAPublicKey;
+import java.time.Duration;
 import java.util.Date;
 
+/**
+ * Émission/validation des JWT en RS256 (section 8 du prompt maître,
+ * non-négociable : "JWT RS256"). Jeton d'accès courte durée (15 min par
+ * défaut) + jeton de rafraîchissement longue durée (7 jours par défaut),
+ * révocable via TokenBlacklistService.
+ */
 @Component
 public class JwtTokenProvider {
 
-    @Value("${jwt.secret:super_secret_default_key_that_is_at_least_256_bits_long_for_hs256}")
-    private String jwtSecret;
+    private static final String CLAIM_TOKEN_TYPE = "type";
+    private static final String TOKEN_TYPE_ACCESS = "access";
+    private static final String TOKEN_TYPE_REFRESH = "refresh";
 
-    @Value("${jwt.expiration.access:900000}")
-    private long jwtExpirationAccessMs;
+    private final RSAPrivateKey privateKey;
+    private final RSAPublicKey publicKey;
+    private final JwtKeyProperties properties;
+    private final TokenBlacklistService tokenBlacklistService;
 
-    @Value("${jwt.expiration.refresh:604800000}")
-    private long jwtExpirationRefreshMs;
-
-    private SecretKey getSigningKey() {
-        return Keys.hmacShaKeyFor(jwtSecret.getBytes());
+    public JwtTokenProvider(RSAPrivateKey privateKey,
+                             RSAPublicKey publicKey,
+                             JwtKeyProperties properties,
+                             TokenBlacklistService tokenBlacklistService) {
+        this.privateKey = privateKey;
+        this.publicKey = publicKey;
+        this.properties = properties;
+        this.tokenBlacklistService = tokenBlacklistService;
     }
 
     public String generateAccessToken(Authentication authentication) {
-        return generateToken(authentication.getName(), jwtExpirationAccessMs);
+        return generateToken(authentication.getName(), properties.getAccessTtlSeconds(), TOKEN_TYPE_ACCESS);
     }
 
     public String generateRefreshToken(Authentication authentication) {
-        return generateToken(authentication.getName(), jwtExpirationRefreshMs);
+        return generateToken(authentication.getName(), properties.getRefreshTtlSeconds(), TOKEN_TYPE_REFRESH);
     }
 
-    private String generateToken(String username, long expirationMs) {
+    private String generateToken(String username, long ttlSeconds, String tokenType) {
         Date now = new Date();
-        Date expiryDate = new Date(now.getTime() + expirationMs);
-
+        Date expiry = new Date(now.getTime() + ttlSeconds * 1000);
         return Jwts.builder()
                 .subject(username)
+                .issuer(properties.getIssuer())
+                .claim(CLAIM_TOKEN_TYPE, tokenType)
                 .issuedAt(now)
-                .expiration(expiryDate)
-                .signWith(getSigningKey())
+                .expiration(expiry)
+                .signWith(privateKey, Jwts.SIG.RS256)
                 .compact();
     }
 
     public String getUsernameFromJWT(String token) {
-        Claims claims = Jwts.parser()
-                .verifyWith(getSigningKey())
+        return parseClaims(token).getSubject();
+    }
+
+    public boolean isRefreshToken(String token) {
+        try {
+            return TOKEN_TYPE_REFRESH.equals(parseClaims(token).get(CLAIM_TOKEN_TYPE, String.class));
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * Durée restante avant expiration, utilisée pour aligner la TTL de la
+     * blacklist Redis lors d'une déconnexion. Duration.ZERO si déjà expiré
+     * ou illisible.
+     */
+    public Duration getRemainingValidity(String token) {
+        try {
+            Date expiration = parseClaims(token).getExpiration();
+            long remainingMs = expiration.getTime() - System.currentTimeMillis();
+            return remainingMs > 0 ? Duration.ofMillis(remainingMs) : Duration.ZERO;
+        } catch (Exception ex) {
+            return Duration.ZERO;
+        }
+    }
+
+    private Claims parseClaims(String token) {
+        return Jwts.parser()
+                .verifyWith(publicKey)
                 .build()
                 .parseSignedClaims(token)
                 .getPayload();
-        
-        return claims.getSubject();
     }
 
-    public boolean validateToken(String authToken) {
+    public boolean validateToken(String token) {
         try {
-            Jwts.parser().verifyWith(getSigningKey()).build().parseSignedClaims(authToken);
-            // Ici, nous pourrions aussi vérifier si le token est dans une blacklist Redis
-            return true;
+            Jwts.parser().verifyWith(publicKey).build().parseSignedClaims(token);
+            return !tokenBlacklistService.isBlacklisted(token);
         } catch (Exception ex) {
-            // Logger l'erreur en temps normal (SignatureException, MalformedJwtException, ExpiredJwtException, etc.)
+            // SignatureException, MalformedJwtException, ExpiredJwtException, etc.
             return false;
         }
     }

@@ -50,6 +50,7 @@ import {
   addReferenceDocument,
   startGeneration,
   updateGeneration,
+  exportDocument,
 } from '@/lib/api/client';
 import { streamGeneration, getStructureFor } from '@/lib/api/generator';
 import { languageLabel, toneLabel, targetLengthLabel, relativeTime } from '@/lib/format';
@@ -238,20 +239,29 @@ export default function GenerateDocumentPage() {
   async function handleExport(format: 'DOCX' | 'PDF' | 'Markdown') {
     if (!activeGen) return;
     setExporting(format);
-    await new Promise((r) => setTimeout(r, 1000));
-    const content = activeGen.content || '';
-    const ext = format === 'Markdown' ? 'md' : format.toLowerCase();
-    const mime = format === 'PDF' ? 'application/pdf' : format === 'Markdown' ? 'text/markdown' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-    const blob = new Blob([content], { type: mime });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${activeGen.contentPivot ?? 'document'}.${ext}`;
-    a.click();
-    URL.revokeObjectURL(url);
-    await updateGeneration(activeGen.id, { status: 'EXPORTE' });
-    toast.success(`Export ${format} terminé`, { description: 'Le fichier a été téléchargé.' });
-    setExporting(null);
+    try {
+      // Export réel via POST /api/v1/export — remplace la simulation locale
+      // qui téléchargeait du texte brut renommé en .pdf/.docx (écart 1.13
+      // du rapport d'écarts). Le backend renvoie un vrai binaire.
+      const blob = await exportDocument({
+        title: activeGen.contentPivot || 'document',
+        content: activeGen.content || '',
+        format,
+      });
+      const ext = format === 'Markdown' ? 'md' : format.toLowerCase();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${activeGen.contentPivot ?? 'document'}.${ext}`;
+      a.click();
+      URL.revokeObjectURL(url);
+      await updateGeneration(activeGen.id, { status: 'EXPORTE' });
+      toast.success(`Export ${format} terminé`, { description: 'Le fichier a été téléchargé.' });
+    } catch (e) {
+      toast.error(`L'export ${format} a échoué`, { description: e instanceof Error ? e.message : undefined });
+    } finally {
+      setExporting(null);
+    }
   }
 
   function toggleNode(id: string) {

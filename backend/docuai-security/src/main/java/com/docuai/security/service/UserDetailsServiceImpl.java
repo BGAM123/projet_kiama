@@ -1,6 +1,5 @@
 package com.docuai.security.service;
 
-import com.docuai.core.model.Utilisateur;
 import com.docuai.core.repository.UtilisateurRepository;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;
@@ -19,9 +18,9 @@ public class UserDetailsServiceImpl implements UserDetailsService {
 
     @Override
     @Transactional(readOnly = true)
-    public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
-        Utilisateur user = utilisateurRepository.findByEmail(username)
-                .orElseThrow(() -> new UsernameNotFoundException("Utilisateur non trouvé avec l'email : " + username));
-        return new UserDetailsImpl(user);
+    public UserDetails loadUserByUsername(String email) throws UsernameNotFoundException {
+        return utilisateurRepository.findByEmail(email)
+                .map(UserDetailsImpl::new)
+                .orElseThrow(() -> new UsernameNotFoundException("Aucun utilisateur pour l'email : " + email));
     }
 }

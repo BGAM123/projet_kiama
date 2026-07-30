@@ -25,10 +25,10 @@ COPY docuai-api                docuai-api
 
 RUN --mount=type=cache,target=/root/.m2 \
     mvn -B -q -DskipTests -pl docuai-api -am package && \
-    cp docuai-api/target/docuai-api-*.jar /workspace/app.jar
+    cp docuai-api/target/docuai-api.jar /workspace/app.jar
 
 # ============================================================================
-# Étape 2 : runtime distroless-like
+# Étape 2 : runtime minimal
 # ============================================================================
 FROM eclipse-temurin:21-jre-alpine AS runtime
 WORKDIR /app

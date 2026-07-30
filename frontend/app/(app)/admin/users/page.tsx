@@ -46,11 +46,10 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { useUsers } from '@/lib/hooks/queries';
+import { useUsers, useRoles } from '@/lib/hooks/queries';
 import { createUser, deleteUser, updateUser } from '@/lib/api/client';
-import { roles as allRoles } from '@/lib/api/fixtures';
 import { formatDate } from '@/lib/format';
-import type { User } from '@/types';
+import type { Role, User } from '@/types';
 
 const createSchema = z.object({
   firstName: z.string().min(1, 'Prénom requis.'),
@@ -74,6 +73,10 @@ type EditValues = z.infer<typeof editSchema>;
 
 export default function AdminUsersPage() {
   const { data: users, isLoading } = useUsers();
+  // Rôles réels (UUID backend), pas la fixture 'r1'/'r2' — nécessaire pour
+  // que roleIds envoyé à createUser/updateUser corresponde à des rôles
+  // existants côté backend.
+  const { data: allRoles = [] } = useRoles();
   const qc = useQueryClient();
 
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -94,7 +97,7 @@ export default function AdminUsersPage() {
           lastName: v.lastName,
           active: v.active,
           password: v.password,
-          roles: allRoles.filter((r) => r.name === v.role),
+          roles: allRoles.filter((r: Role) => r.name === v.role),
         })
       ).data,
     onSuccess: () => {
@@ -115,7 +118,7 @@ export default function AdminUsersPage() {
           lastName: v.lastName,
           email: v.email,
           active: v.active,
-          roles: allRoles.filter((r) => r.name === v.role),
+          roles: allRoles.filter((r: Role) => r.name === v.role),
         })
       ).data,
     onSuccess: () => {

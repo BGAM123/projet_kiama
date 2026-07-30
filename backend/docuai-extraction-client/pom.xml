@@ -12,8 +12,12 @@
     </parent>
 
     <artifactId>docuai-extraction-client</artifactId>
-    <name>DocuAI Extraction Client</name>
-    <description>Parsers DOCX (Apache POI) et PDF (PDFBox), détection MIME (Tika), construction de l'arbre structurel JSON.</description>
+    <name>docuai-extraction-client</name>
+    <description>
+        Infrastructure d'extraction documentaire : détection MIME (Tika),
+        parsing DOCX (Apache POI) / PDF (PDFBox), construction de l'arbre de
+        structure, upload objet MinIO.
+    </description>
 
     <dependencies>
         <dependency>
@@ -22,7 +26,7 @@
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter</artifactId>
+            <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
         <dependency>
             <groupId>org.apache.tika</groupId>
@@ -45,9 +49,18 @@
             <artifactId>minio</artifactId>
         </dependency>
         <dependency>
+            <groupId>io.github.resilience4j</groupId>
+            <artifactId>resilience4j-spring-boot3</artifactId>
+        </dependency>
+        <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
             <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 </project>

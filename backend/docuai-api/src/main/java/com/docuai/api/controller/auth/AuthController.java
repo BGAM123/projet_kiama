@@ -1,77 +1,62 @@
 package com.docuai.api.controller.auth;
 
 import com.docuai.api.dto.ApiResponse;
+import com.docuai.api.dto.ChangePasswordRequest;
 import com.docuai.api.dto.auth.JwtResponse;
 import com.docuai.api.dto.auth.LoginRequest;
 import com.docuai.api.dto.auth.RefreshTokenRequest;
-import com.docuai.security.jwt.JwtTokenProvider;
+import com.docuai.api.service.AuthService;
+import com.docuai.api.service.UserService;
 import com.docuai.security.service.UserDetailsImpl;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.authentication.AuthenticationManager;
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.GrantedAuthority;
-import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.List;
-import java.util.stream.Collectors;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/v1/auth")
-@Tag(name = "Authentication", description = "Endpoints de connexion et rafraîchissement")
+@Tag(name = "Authentication", description = "Connexion, rafraîchissement, déconnexion, mot de passe")
 public class AuthController {
 
-    @Autowired
-    private AuthenticationManager authenticationManager;
+    private final AuthService authService;
+    private final UserService userService;
 
-    @Autowired
-    private JwtTokenProvider tokenProvider;
+    public AuthController(AuthService authService, UserService userService) {
+        this.authService = authService;
+        this.userService = userService;
+    }
 
     @PostMapping("/login")
-    @Operation(summary = "Authentifier un utilisateur et récupérer les JWT")
+    @Operation(summary = "Authentifier un utilisateur et récupérer les jetons JWT")
     public ResponseEntity<ApiResponse<JwtResponse>> login(@Valid @RequestBody LoginRequest request) {
-        
-        Authentication authentication = authenticationManager.authenticate(
-                new UsernamePasswordAuthenticationToken(request.getEmail(), request.getPassword()));
-
-        SecurityContextHolder.getContext().setAuthentication(authentication);
-
-        String jwt = tokenProvider.generateAccessToken(authentication);
-        String refreshToken = tokenProvider.generateRefreshToken(authentication);
-
-        UserDetailsImpl userDetails = (UserDetailsImpl) authentication.getPrincipal();
-        
-        List<String> authorities = userDetails.getAuthorities().stream()
-                .map(GrantedAuthority::getAuthority)
-                .collect(Collectors.toList());
-
-        List<String> roles = authorities.stream().filter(a -> a.startsWith("ROLE_")).collect(Collectors.toList());
-        List<String> permissions = authorities.stream().filter(a -> !a.startsWith("ROLE_")).collect(Collectors.toList());
-
-        JwtResponse jwtResponse = new JwtResponse(jwt, refreshToken, userDetails.getUsername(), roles, permissions);
-
-        return ResponseEntity.ok(ApiResponse.success(jwtResponse));
+        return ResponseEntity.ok(ApiResponse.success(authService.login(request.getEmail(), request.getPassword())));
     }
 
     @PostMapping("/refresh")
-    @Operation(summary = "Rafraîchir le jeton d'accès")
+    @Operation(summary = "Rafraîchir le jeton d'accès à partir d'un refresh token valide")
     public ResponseEntity<ApiResponse<JwtResponse>> refresh(@Valid @RequestBody RefreshTokenRequest request) {
-        String requestRefreshToken = request.getRefreshToken();
-        
-        if (tokenProvider.validateToken(requestRefreshToken)) {
-            String username = tokenProvider.getUsernameFromJWT(requestRefreshToken);
-            
-            // Recharger l'authentification (pour simplifier, on suppose que l'auth object n'est plus en contexte pour ce test)
-            // Dans un cas réel on doit valider que l'utilisateur existe toujours etc.
-            // ...
-            // Nous construisons la logique de rafraîchissement au complet si besoin ultérieurement
-        }
-        
-        return ResponseEntity.badRequest().body(ApiResponse.error("Jeton de rafraîchissement invalide ou expiré"));
+        return ResponseEntity.ok(ApiResponse.success(authService.refresh(request.getRefreshToken())));
+    }
+
+    @PostMapping("/logout")
+    @Operation(summary = "Déconnexion — révoque le refresh token (liste noire Redis)")
+    public ResponseEntity<ApiResponse<Map<String, Boolean>>> logout(@Valid @RequestBody RefreshTokenRequest request) {
+        authService.logout(request.getRefreshToken());
+        return ResponseEntity.ok(ApiResponse.success(Map.of("ok", true)));
+    }
+
+    @PostMapping("/password")
+    @PreAuthorize("isAuthenticated()")
+    @Operation(summary = "Changer son propre mot de passe (vérifie l'ancien mot de passe)")
+    public ResponseEntity<ApiResponse<Map<String, Boolean>>> changePassword(
+            @Valid @RequestBody ChangePasswordRequest request,
+            @AuthenticationPrincipal UserDetailsImpl principal) {
+        userService.changeOwnPassword(principal.getUtilisateur().getId(), request.getCurrentPassword(), request.getNewPassword());
+        return ResponseEntity.ok(ApiResponse.success(Map.of("ok", true)));
     }
 }

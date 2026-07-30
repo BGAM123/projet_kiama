@@ -39,7 +39,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { useGeneration, useDocumentTypes } from '@/lib/hooks/queries';
-import { updateGeneration } from '@/lib/api/client';
+import { updateGeneration, exportDocument } from '@/lib/api/client';
 import { getStructureFor } from '@/lib/api/generator';
 import { GeneratedStatusBadge } from '@/components/status-badge';
 import { cn } from '@/lib/utils';
@@ -113,19 +113,24 @@ export default function EditorPage() {
 
   async function handleExport(format: 'DOCX' | 'PDF' | 'Markdown') {
     setExporting(format);
-    await new Promise((r) => setTimeout(r, 1200));
-    const content = editor?.getHTML() ?? doc?.content ?? '';
-    const mime = format === 'PDF' ? 'application/pdf' : format === 'Markdown' ? 'text/markdown' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-    const blob = new Blob([content], { type: mime });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${doc?.contentPivot ?? 'document'}.${format === 'Markdown' ? 'md' : format.toLowerCase()}`;
-    a.click();
-    URL.revokeObjectURL(url);
-    if (doc) await updateGeneration(doc.id, { status: 'EXPORTE' });
-    toast.success(`Export ${format} terminé`, { description: 'Le fichier a été téléchargé.' });
-    setExporting(null);
+    try {
+      // Export réel via POST /api/v1/export — cf. chat/page.tsx (même
+      // correction, écart 1.13 du rapport d'écarts).
+      const content = editor?.getHTML() ?? doc?.content ?? '';
+      const blob = await exportDocument({ title: doc?.contentPivot || 'document', content, format });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${doc?.contentPivot ?? 'document'}.${format === 'Markdown' ? 'md' : format.toLowerCase()}`;
+      a.click();
+      URL.revokeObjectURL(url);
+      if (doc) await updateGeneration(doc.id, { status: 'EXPORTE' });
+      toast.success(`Export ${format} terminé`, { description: 'Le fichier a été téléchargé.' });
+    } catch (e) {
+      toast.error(`L'export ${format} a échoué`, { description: e instanceof Error ? e.message : undefined });
+    } finally {
+      setExporting(null);
+    }
   }
 
   if (!editor) return null;

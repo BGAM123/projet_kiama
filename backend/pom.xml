@@ -19,6 +19,18 @@
     <name>DocuAI Parent</name>
     <description>Backend DocuAI — extraction et génération documentaire multi-fournisseurs IA</description>
 
+    <!--
+        Choix Maven (multi-module) plutôt que Gradle : le projet cible une
+        équipe Java/Spring classique, Maven offre une gestion déclarative des
+        dépendances via <dependencyManagement> particulièrement adaptée à un
+        multi-module avec un BOM Spring Boot (spring-boot-starter-parent), un
+        outillage IDE/CI plus homogène côté Spring, et un format XML plus
+        simple à relire/diffier sans exécuter de build (contrainte réelle de
+        cet environnement de développement, qui n'a pas d'accès à un outil de
+        build). Gradle apporterait un gain de performance de build peu
+        pertinent ici (pas de builds incrémentaux à grande échelle en jeu).
+    -->
+
     <modules>
         <module>docuai-core</module>
         <module>docuai-security</module>
@@ -34,7 +46,6 @@
         <maven.compiler.target>21</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 
-        <spring-ai.version>1.0.0-M3</spring-ai.version>
         <springdoc.version>2.6.0</springdoc.version>
         <mapstruct.version>1.6.2</mapstruct.version>
         <resilience4j.version>2.2.0</resilience4j.version>
@@ -50,13 +61,6 @@
 
     <dependencyManagement>
         <dependencies>
-            <dependency>
-                <groupId>org.springframework.ai</groupId>
-                <artifactId>spring-ai-bom</artifactId>
-                <version>${spring-ai.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
             <dependency>
                 <groupId>org.testcontainers</groupId>
                 <artifactId>testcontainers-bom</artifactId>
@@ -154,6 +158,11 @@
                 <version>${resilience4j.version}</version>
             </dependency>
             <dependency>
+                <groupId>io.github.resilience4j</groupId>
+                <artifactId>resilience4j-reactor</artifactId>
+                <version>${resilience4j.version}</version>
+            </dependency>
+            <dependency>
                 <groupId>net.logstash.logback</groupId>
                 <artifactId>logstash-logback-encoder</artifactId>
                 <version>${logstash-logback.version}</version>
@@ -180,6 +189,18 @@
                                 <groupId>org.projectlombok</groupId>
                                 <artifactId>lombok</artifactId>
                                 <version>${lombok.version}</version>
+                            </path>
+                            <!--
+                                lombok-mapstruct-binding requis dès que Lombok ET MapStruct
+                                traitent la même classe (ex. un @Builder sur une entité mappée
+                                par un mapper MapStruct) : sans lui, l'ordre d'exécution des
+                                deux annotation processors n'est pas garanti et MapStruct peut
+                                ne pas voir les accesseurs générés par Lombok.
+                            -->
+                            <path>
+                                <groupId>org.projectlombok</groupId>
+                                <artifactId>lombok-mapstruct-binding</artifactId>
+                                <version>0.2.0</version>
                             </path>
                         </annotationProcessorPaths>
                     </configuration>

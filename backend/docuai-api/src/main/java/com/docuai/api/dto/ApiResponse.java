@@ -2,26 +2,26 @@ package com.docuai.api.dto;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 
+/**
+ * Enveloppe standard de réponse (section 7 du prompt maître) :
+ * { "data": {...}, "error": null, "meta": {...} }
+ */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class ApiResponse<T> {
     private T data;
     private Object error;
     private Object meta;
 
-    public ApiResponse() {}
-
-    public ApiResponse(T data) {
-        this.data = data;
-        this.error = null;
+    public ApiResponse() {
     }
 
-    public ApiResponse(T data, Object meta) {
+    private ApiResponse(T data, Object meta) {
         this.data = data;
         this.meta = meta;
     }
 
     public static <T> ApiResponse<T> success(T data) {
-        return new ApiResponse<>(data);
+        return new ApiResponse<>(data, null);
     }
 
     public static <T> ApiResponse<T> success(T data, Object meta) {

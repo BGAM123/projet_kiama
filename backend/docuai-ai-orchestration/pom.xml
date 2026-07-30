@@ -12,42 +12,69 @@
     </parent>
 
     <artifactId>docuai-ai-orchestration</artifactId>
-    <name>DocuAI AI Orchestration</name>
-    <description>Pattern Stratégie multi-fournisseurs (OpenAI, Claude, Ollama, Gemini, Mistral, DeepSeek), Prompt Builder, RAG pgvector, Structural Validator, Content Assembler.</description>
+    <name>docuai-ai-orchestration</name>
+    <description>
+        Infrastructure IA : Pattern Stratégie multi-fournisseurs (AiProviderPort),
+        Prompt Builder, pipeline RAG (embeddings + recherche pgvector),
+        Structural Validator, Content Assembler.
+
+        Choix documenté (section 3 du prompt maître, alternative prévue si
+        Spring AI ne convient pas) : abstraction MANUELLE plutôt que Spring AI.
+        Spring AI (1.0.0-M3 au moment de l'écriture) est encore en milestone,
+        avec une surface d'API qui bouge entre versions ; dans un environnement
+        où aucune compilation locale n'est possible pour valider les
+        changements (cf. rapport de livraison), s'appuyer sur des clients HTTP
+        explicites (WebClient) par fournisseur, aux contrats stables et
+        documentés publiquement (OpenAI, Anthropic, Ollama), réduit le risque
+        de rupture silencieuse. Cette couche reste isolée derrière
+        AiProviderPort : migrer vers Spring AI plus tard ne toucherait que ce
+        module.
+    </description>
 
     <dependencies>
         <dependency>
             <groupId>com.docuai</groupId>
             <artifactId>docuai-core</artifactId>
         </dependency>
+        <!--
+            spring-boot-starter-webflux fournit WebClient (client HTTP réactif
+            utilisé pour appeler les fournisseurs IA, y compris en streaming
+            SSE/NDJSON) et Flux (contrat AiProviderPort.streamGenerate).
+            Il n'entraîne PAS de bascule de docuai-api vers un serveur
+            réactif : Spring Boot ne choisit WebApplicationType.REACTIVE que
+            si aucun DispatcherServlet n'est présent sur le classpath, or
+            docuai-api dépend de spring-boot-starter-web (servlet) — donc le
+            type d'application effectif reste SERVLET (voir
+            WebApplicationType.deduceFromClasspath). WebClient est simplement
+            utilisé de façon imperative-friendly (bloquant côté appelant si
+            besoin) ou réellement en streaming pour la génération.
+        -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-webflux</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-openai-spring-boot-starter</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-anthropic-spring-boot-starter</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-ollama-spring-boot-starter</artifactId>
         </dependency>
         <dependency>
             <groupId>io.github.resilience4j</groupId>
             <artifactId>resilience4j-spring-boot3</artifactId>
         </dependency>
         <dependency>
-            <groupId>com.pgvector</groupId>
-            <artifactId>pgvector</artifactId>
+            <groupId>io.github.resilience4j</groupId>
+            <artifactId>resilience4j-reactor</artifactId>
         </dependency>
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
             <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.projectreactor</groupId>
+            <artifactId>reactor-test</artifactId>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 </project>

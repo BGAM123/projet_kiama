@@ -12,8 +12,11 @@
     </parent>
 
     <artifactId>docuai-security</artifactId>
-    <name>DocuAI Security</name>
-    <description>Authentification JWT RS256, RBAC, filtres Spring Security.</description>
+    <name>docuai-security</name>
+    <description>
+        Infrastructure de sécurité : JWT RS256 (émission/validation), filtres
+        Spring Security, RBAC, liste noire Redis des refresh tokens révoqués.
+    </description>
 
     <dependencies>
         <dependency>
@@ -27,6 +30,32 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+        <!--
+            Nécessaires car spring-security-web (amené par
+            spring-boot-starter-security) déclare jakarta.servlet-api en scope
+            "provided" — un scope non transitif en Maven. docuai-security
+            référence directement HttpServletRequest/Filter/... (dans
+            JwtAuthenticationFilter, JwtAuthenticationEntryPoint) et doit donc
+            le redéclarer explicitement pour compiler seul, indépendamment du
+            fait que docuai-api (spring-boot-starter-web) l'apporte à
+            l'exécution. Version gérée par le BOM spring-boot-starter-parent,
+            pas besoin de la préciser.
+        -->
+        <dependency>
+            <groupId>jakarta.servlet</groupId>
+            <artifactId>jakarta.servlet-api</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <!--
+            JwtAuthenticationEntryPoint sérialise directement le corps d'erreur
+            JSON avec un ObjectMapper Jackson (nécessaire car ce point d'entrée
+            s'exécute avant tout @ControllerAdvice, cf. sa Javadoc) — Jackson
+            n'est pas amené transitivement par spring-boot-starter-security.
+        -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
         </dependency>
         <dependency>
             <groupId>io.jsonwebtoken</groupId>
@@ -44,6 +73,16 @@
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
             <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-test</artifactId>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 </project>

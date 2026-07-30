@@ -1,11 +1,12 @@
 package com.docuai.security.service;
 
-import com.docuai.core.model.Utilisateur;
-import com.docuai.core.model.Role;
 import com.docuai.core.model.Permission;
+import com.docuai.core.model.Role;
+import com.docuai.core.model.Utilisateur;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.userdetails.UserDetails;
+
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.Set;
@@ -57,7 +58,7 @@ public class UserDetailsImpl implements UserDetails {
 
     @Override
     public boolean isEnabled() {
-        return utilisateur.getActif();
+        return Boolean.TRUE.equals(utilisateur.getActif());
     }
 
     public Utilisateur getUtilisateur() {

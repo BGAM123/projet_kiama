@@ -1,9 +1,18 @@
-// Mock API layer.
-// Each function mirrors a real REST endpoint (same path, same verb, same shape)
-// but resolves against in-memory fixtures with simulated latency.
-// To switch to a real backend: replace the body of these functions with Axios
-// calls to the same paths; the signatures and return envelopes stay identical.
+// Mock API layer — PARTIELLEMENT MIGRÉE vers le vrai backend Spring Boot.
+//
+// Périmètre réel (via lib/api/http.ts) à ce stade de l'intégration : auth
+// (login/refresh/logout/password), users (CRUD complet + reset mot de passe
+// admin), roles (lecture), upload/extraction, export, notifications, audit
+// logs. Les fonctions encore mockées ci-dessous n'ont pas d'endpoint backend
+// correspondant (catégories, document-types CRUD, conversations, générations,
+// streaming, ai-configs, dashboard) et continuent de résoudre contre les
+// fixtures en mémoire.
+//
+// Chaque fonction migrée garde exactement la même signature qu'avant, pour
+// que les hooks React Query et les composants qui les consomment n'aient pas
+// à changer.
 
+import { http, toApiError } from './http';
 import {
   aiModelConfigs,
   auditLogs,
@@ -14,10 +23,7 @@ import {
   messages,
   notifications,
   referenceDocuments,
-  roles,
   structures,
-  users,
-  userPasswords,
 } from './fixtures';
 import type {
   AiModelConfig,
@@ -32,6 +38,7 @@ import type {
   Message,
   Notification,
   ReferenceDocument,
+  Role,
   User,
 } from '@/types';
 import type { ApiSuccess } from '@/types';
@@ -66,129 +73,223 @@ async function guard<T>(fn: () => T | Promise<T>): Promise<ApiSuccess<T>> {
 const uid = (p: string) => `${p}${Math.random().toString(36).slice(2, 9)}`;
 
 // ---------------------------------------------------------------------------
-// Auth
+// Adaptateurs backend réel — le backend Spring Boot ne renvoie pas exactement
+// la même forme que les fixtures mock, cf. rapport d'écarts :
+//  - UserDTO backend : { id, firstName, lastName, email, active, createdAt,
+//    roles: [{id, name, description}] } — pas de "permissions" imbriquées
+//    par rôle (contrairement au type frontend Role.permissions).
+//  - JwtResponse backend : roles/permissions sont deux tableaux plats
+//    (ex. roles: ["ROLE_ADMIN"], permissions: ["USERS_MANAGE", ...]),
+//    alors que le frontend attend des permissions imbriquées par rôle
+//    (User.roles[].permissions[]). On reconstruit donc une forme équivalente
+//    côté client : chaque rôle nommé porte l'ensemble des permissions de
+//    l'utilisateur (suffisant pour hasRole()/hasPermission(), qui ne font que
+//    des tests d'existence, jamais un mapping strict rôle → permissions).
+// ---------------------------------------------------------------------------
+
+interface BackendPermissionDTO {
+  id: string;
+  code: string;
+  description: string;
+}
+
+interface BackendRoleDTO {
+  id: string;
+  name: string;
+  description: string;
+  // Absent de la réponse /auth/login (voir adaptJwtResponse ci-dessous), mais
+  // présent sur RoleDTO depuis /roles et /users (Bloc 2 du backend).
+  permissions?: BackendPermissionDTO[];
+}
+
+interface BackendUserDTO {
+  id: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  active: boolean;
+  createdAt: string;
+  roles: BackendRoleDTO[];
+}
+
+interface BackendJwtResponse {
+  accessToken: string;
+  refreshToken: string;
+  type: string;
+  email: string;
+  roles: string[];
+  permissions: string[];
+  user: BackendUserDTO;
+}
+
+function adaptRoleDTO(dto: BackendRoleDTO): Role {
+  return {
+    id: dto.id,
+    name: dto.name,
+    description: dto.description,
+    permissions: (dto.permissions ?? []).map((p) => ({ id: p.id, code: p.code, description: p.description })),
+  };
+}
+
+function adaptUserDTO(dto: BackendUserDTO): User {
+  return {
+    id: dto.id,
+    email: dto.email,
+    firstName: dto.firstName,
+    lastName: dto.lastName,
+    active: dto.active,
+    createdAt: dto.createdAt,
+    roles: (dto.roles ?? []).map(adaptRoleDTO),
+  };
+}
+
+function adaptJwtResponse(jwt: BackendJwtResponse): AuthSession {
+  const permissions = (jwt.permissions ?? []).map((code) => ({ id: code, code, description: '' }));
+  const roleNames = (jwt.roles ?? []).map((r) => r.replace(/^ROLE_/, ''));
+  const user: User = {
+    ...adaptUserDTO(jwt.user),
+    roles: roleNames.map((name) => ({ id: name, name, description: '', permissions })),
+  };
+  return {
+    accessToken: jwt.accessToken,
+    refreshToken: jwt.refreshToken,
+    user,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Auth — branché sur le vrai backend (POST /auth/login, /auth/refresh,
+// /auth/logout). Le token mock (`mock-access-…`) et le refresh jamais
+// déclenché automatiquement sont remplacés par de vrais JWT + intercepteur
+// 401 (lib/api/http.ts) — écarts 6.1, 6.2, 6.5 du rapport.
 // ---------------------------------------------------------------------------
 
 export async function login(payload: LoginPayload): Promise<ApiSuccess<AuthSession>> {
-  return guard(() => {
-    const user = users.find((u) => u.email === payload.email);
-    const expected = user ? (userPasswords[user.id] ?? 'demo1234') : null;
-    if (!user || !expected || payload.password !== expected) {
-      throw new ApiError(
-        'AUTH_INVALID_CREDENTIALS',
-        'Adresse e-mail ou mot de passe incorrect.',
-        '/api/v1/auth/login',
-      );
-    }
-    if (!user.active) {
-      throw new ApiError(
-        'AUTH_ACCOUNT_DISABLED',
-        'Ce compte est désactivé. Contactez un administrateur.',
-        '/api/v1/auth/login',
-      );
-    }
-    return {
-      accessToken: `mock-access-${user.id}-${Date.now()}`,
-      refreshToken: `mock-refresh-${user.id}`,
-      user,
-    };
-  });
+  try {
+    const res = await http.post<{ data: BackendJwtResponse }>('/auth/login', payload);
+    return ok(adaptJwtResponse(res.data.data));
+  } catch (e) {
+    throw toApiError(e, '/api/v1/auth/login');
+  }
 }
 
-export async function refreshSession(userId: string): Promise<ApiSuccess<AuthSession>> {
-  return guard(() => {
-    const user = users.find((u) => u.id === userId);
-    if (!user) throw new ApiError('AUTH_SESSION_EXPIRED', 'Session expirée.', '/api/v1/auth/refresh');
-    return {
-      accessToken: `mock-access-${user.id}-${Date.now()}`,
-      refreshToken: `mock-refresh-${user.id}`,
-      user,
-    };
-  });
+// Signature conservée en `refreshToken` (et non plus `userId`) — le backend
+// n'a aucun moyen de rafraîchir un token à partir du seul id utilisateur, il
+// lui faut le refresh token. lib/auth-store.ts a été mis à jour en conséquence.
+export async function refreshSession(refreshToken: string): Promise<ApiSuccess<AuthSession>> {
+  try {
+    const res = await http.post<{ data: BackendJwtResponse }>('/auth/refresh', { refreshToken });
+    return ok(adaptJwtResponse(res.data.data));
+  } catch (e) {
+    throw toApiError(e, '/api/v1/auth/refresh');
+  }
+}
+
+export async function logout(refreshToken: string): Promise<ApiSuccess<{ ok: boolean }>> {
+  try {
+    const res = await http.post<{ data: { ok: boolean } }>('/auth/logout', { refreshToken });
+    return ok(res.data.data);
+  } catch (e) {
+    // La déconnexion locale doit réussir même si l'appel serveur échoue
+    // (token déjà expiré, backend injoignable, etc.) — on ne bloque jamais
+    // l'utilisateur sur cet appel.
+    throw toApiError(e, '/api/v1/auth/logout');
+  }
 }
 
 // ---------------------------------------------------------------------------
-// Users
+// Users — branché sur les vrais endpoints /users du Bloc 2 (CRUD complet +
+// reset mot de passe admin, cf. UserController).
 // ---------------------------------------------------------------------------
 
 export async function listUsers(): Promise<ApiSuccess<User[]>> {
-  return guard(() => [...users]);
+  try {
+    const res = await http.get<{ data: BackendUserDTO[] }>('/users');
+    return ok(res.data.data.map(adaptUserDTO));
+  } catch (e) {
+    throw toApiError(e, '/api/v1/users');
+  }
 }
 
 export async function createUser(input: Omit<User, 'id' | 'createdAt'> & { password?: string }): Promise<ApiSuccess<User>> {
-  return guard(() => {
-    const id = uid('u');
-    const password = input.password || generatePassword();
-    const newUser: User = {
-      id,
+  try {
+    const res = await http.post<{ data: BackendUserDTO }>('/users', {
       email: input.email,
       firstName: input.firstName,
       lastName: input.lastName,
       active: input.active,
-      roles: input.roles,
-      createdAt: new Date().toISOString(),
-    };
-    users.push(newUser);
-    userPasswords[id] = password;
-    return newUser;
-  });
+      password: input.password,
+      roleIds: input.roles.map((r) => r.id),
+    });
+    return ok(adaptUserDTO(res.data.data));
+  } catch (e) {
+    throw toApiError(e, '/api/v1/users');
+  }
 }
 
 export async function updateUser(id: string, patch: Partial<User>): Promise<ApiSuccess<User>> {
-  return guard(() => {
-    const idx = users.findIndex((u) => u.id === id);
-    if (idx < 0) throw new ApiError('USER_NOT_FOUND', 'Utilisateur introuvable.', `/api/v1/users/${id}`);
-    users[idx] = { ...users[idx], ...patch, id };
-    return users[idx];
-  });
+  try {
+    const res = await http.patch<{ data: BackendUserDTO }>(`/users/${id}`, {
+      email: patch.email,
+      firstName: patch.firstName,
+      lastName: patch.lastName,
+      active: patch.active,
+      roleIds: patch.roles?.map((r) => r.id),
+    });
+    return ok(adaptUserDTO(res.data.data));
+  } catch (e) {
+    throw toApiError(e, `/api/v1/users/${id}`);
+  }
 }
 
 export async function deleteUser(id: string): Promise<ApiSuccess<{ id: string }>> {
-  return guard(() => {
-    const idx = users.findIndex((u) => u.id === id);
-    if (idx < 0) throw new ApiError('USER_NOT_FOUND', 'Utilisateur introuvable.', `/api/v1/users/${id}`);
-    users.splice(idx, 1);
-    delete userPasswords[id];
-    return { id };
-  });
+  try {
+    await http.delete(`/users/${id}`);
+    return ok({ id });
+  } catch (e) {
+    throw toApiError(e, `/api/v1/users/${id}`);
+  }
 }
 
 // ---------------------------------------------------------------------------
-// Password management
+// Roles — lecture réelle (GET /roles), nécessaire pour résoudre les vrais
+// UUID de rôle envoyés à createUser/updateUser (les fixtures locales ont des
+// id factices 'r1'/'r2' qui ne correspondent à rien côté backend).
 // ---------------------------------------------------------------------------
 
-function generatePassword(): string {
-  const lower = 'abcdefghijkmnpqrstuvwxyz';
-  const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
-  const digits = '23456789';
-  const all = lower + upper + digits;
-  const pick = (set: string) => set[Math.floor(Math.random() * set.length)];
-  let pw = pick(upper) + pick(lower) + pick(digits);
-  while (pw.length < 10) pw += pick(all);
-  return pw;
+export async function listRoles(): Promise<ApiSuccess<Role[]>> {
+  try {
+    const res = await http.get<{ data: BackendRoleDTO[] }>('/roles');
+    return ok(res.data.data.map(adaptRoleDTO));
+  } catch (e) {
+    throw toApiError(e, '/api/v1/roles');
+  }
 }
+
+// ---------------------------------------------------------------------------
+// Password management — /auth/password (soi-même) et /users/{id}/password
+// (reset admin), cf. AuthController / UserController.
+// ---------------------------------------------------------------------------
 
 export async function changePassword(userId: string, current: string, next: string): Promise<ApiSuccess<{ ok: true }>> {
-  return guard(() => {
-    const stored = userPasswords[userId];
-    if (!stored || stored !== current) {
-      throw new ApiError('AUTH_INVALID_CREDENTIALS', 'Le mot de passe actuel est incorrect.', '/api/v1/auth/password');
-    }
-    if (next.length < 8) {
-      throw new ApiError('AUTH_PASSWORD_TOO_SHORT', 'Le nouveau mot de passe doit contenir au moins 8 caractères.', '/api/v1/auth/password');
-    }
-    userPasswords[userId] = next;
-    return { ok: true } as const;
-  });
+  try {
+    // userId conservé dans la signature pour compatibilité avec les appelants
+    // existants (mon-compte/mot-de-passe) ; le backend identifie l'utilisateur
+    // courant via le JWT, ce paramètre n'est pas envoyé.
+    await http.post('/auth/password', { currentPassword: current, newPassword: next });
+    return ok({ ok: true } as const);
+  } catch (e) {
+    throw toApiError(e, '/api/v1/auth/password');
+  }
 }
 
 export async function adminResetPassword(userId: string, next: string): Promise<ApiSuccess<{ ok: true }>> {
-  return guard(() => {
-    const user = users.find((u) => u.id === userId);
-    if (!user) throw new ApiError('USER_NOT_FOUND', 'Utilisateur introuvable.', `/api/v1/users/${userId}/password`);
-    userPasswords[userId] = next;
-    return { ok: true } as const;
-  });
+  try {
+    await http.patch(`/users/${userId}/password`, { newPassword: next });
+    return ok({ ok: true } as const);
+  } catch (e) {
+    throw toApiError(e, `/api/v1/users/${userId}/password`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -456,22 +557,156 @@ export async function getDashboardStats(userId: string): Promise<ApiSuccess<impo
 }
 
 // ---------------------------------------------------------------------------
-// Audit logs & notifications
+// Audit logs & notifications — branchés sur le backend réel.
 // ---------------------------------------------------------------------------
 
+interface BackendActivityLog {
+  id: string;
+  userId: string | null;
+  action: string;
+  typeEntite: string | null;
+  idEntite: string | null;
+  dateAction: string;
+  adresseIp: string | null;
+}
+
+function adaptActivityLog(log: BackendActivityLog): AuditLogEntry {
+  return {
+    id: log.id,
+    userId: log.userId ?? '',
+    // Le backend ne joint pas le nom de l'utilisateur sur journal_activite —
+    // seul l'id est disponible. Amélioration possible côté backend (jointure
+    // ou dénormalisation), hors périmètre de cette itération.
+    userName: '',
+    action: log.action,
+    entityType: log.typeEntite ?? '',
+    entityId: log.idEntite ?? '',
+    timestamp: log.dateAction,
+    ipAddress: log.adresseIp ?? '',
+  };
+}
+
 export async function listAuditLogs(): Promise<ApiSuccess<AuditLogEntry[]>> {
-  return guard(() => [...auditLogs].sort((a, b) => b.timestamp.localeCompare(a.timestamp)));
+  try {
+    // GET /api/v1/admin/logs (pas /api/v1/audit-logs comme prévu côté mock) —
+    // renvoie les 10 dernières entrées seulement, pas de pagination serveur
+    // pour l'instant (écart 1.11 / 10.1 du rapport).
+    const res = await http.get<{ data: BackendActivityLog[] }>('/admin/logs');
+    return ok(res.data.data.map(adaptActivityLog));
+  } catch (e) {
+    throw toApiError(e, '/api/v1/admin/logs');
+  }
+}
+
+interface BackendNotification {
+  id: string;
+  userId: string;
+  type: string;
+  contenu: string;
+  lue: boolean;
+  dateCreation: string;
+}
+
+function adaptNotification(n: BackendNotification): Notification {
+  return {
+    id: n.id,
+    userId: n.userId,
+    type: (n.type as Notification['type']) ?? 'INFO',
+    content: n.contenu,
+    read: n.lue,
+    createdAt: n.dateCreation,
+  };
 }
 
 export async function listNotifications(userId: string): Promise<ApiSuccess<Notification[]>> {
-  return guard(() => notifications.filter((n) => n.userId === userId).sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
+  try {
+    // GET /api/v1/notifications/user/{userId} (path param, pas ?userId=) —
+    // écart 1.10 du rapport, corrigé côté frontend.
+    const res = await http.get<{ data: BackendNotification[] }>(`/notifications/user/${userId}`);
+    return ok(res.data.data.map(adaptNotification));
+  } catch (e) {
+    throw toApiError(e, `/api/v1/notifications/user/${userId}`);
+  }
 }
 
-export async function markNotificationRead(id: string, read: boolean): Promise<ApiSuccess<Notification>> {
-  return guard(() => {
-    const idx = notifications.findIndex((n) => n.id === id);
-    if (idx < 0) throw new ApiError('NOTIFICATION_NOT_FOUND', 'Notification introuvable.', `/api/v1/notifications/${id}`);
-    notifications[idx].read = read;
-    return notifications[idx];
-  });
+export async function markNotificationRead(id: string, read: boolean): Promise<ApiSuccess<{ ok: true }>> {
+  if (!read) {
+    // Le backend n'expose que PUT /notifications/{id}/read (marque "lue"),
+    // pas de "marquer non lue" — fonctionnalité absente côté backend
+    // (hors périmètre validé). On échoue explicitement plutôt que de
+    // prétendre un succès qui ne serait pas persisté.
+    throw new ApiError(
+      'UNSUPPORTED_OPERATION',
+      'Le backend ne permet pas encore de marquer une notification comme non lue.',
+      `/api/v1/notifications/${id}/read`,
+    );
+  }
+  try {
+    // PUT (pas PATCH) /api/v1/notifications/{id}/read — écart 1.10.
+    await http.put(`/notifications/${id}/read`);
+    return ok({ ok: true } as const);
+  } catch (e) {
+    throw toApiError(e, `/api/v1/notifications/${id}/read`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Upload & extraction de fichier — réel (POST /api/v1/documents/upload).
+//
+// Ce endpoint existe côté backend et fait une vraie extraction Tika + upload
+// MinIO, mais il n'y a pas encore de notion de "Document Type" côté serveur
+// (écart 1.2/8.4, hors périmètre de cette itération). L'écran d'import
+// (documents-types/import/page.tsx) appelle donc CE endpoint pour une
+// extraction réelle du texte, puis persiste le Document Type lui-même via
+// importDocumentType() (mock) faute de endpoint backend équivalent.
+// ---------------------------------------------------------------------------
+
+export interface ExtractedContentDetail {
+  fileName: string;
+  mimeType: string;
+  rawText: string;
+  fileUrl: string;
+}
+
+export async function uploadAndExtractDocument(file: File): Promise<ApiSuccess<ExtractedContentDetail>> {
+  try {
+    const form = new FormData();
+    // Nom de champ multipart exact attendu par le backend :
+    // @RequestParam("file") MultipartFile file (DocumentController.java).
+    form.append('file', file);
+    // Ne PAS fixer le header Content-Type manuellement : le navigateur doit
+    // générer lui-même le boundary multipart. Le forcer à
+    // "multipart/form-data" sans boundary casse le parsing côté serveur.
+    const res = await http.post<{ data: ExtractedContentDetail }>('/documents/upload', form);
+    return ok(res.data.data);
+  } catch (e) {
+    throw toApiError(e, '/api/v1/documents/upload');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Export de document — réel (POST /api/v1/export). Remplace la simulation
+// locale (Blob de texte brut renommé en .pdf/.docx) par un vrai fichier
+// binaire généré côté serveur (écart 1.13 du rapport).
+// ---------------------------------------------------------------------------
+
+export type ExportFormat = 'DOCX' | 'PDF' | 'Markdown';
+
+const EXPORT_FORMAT_MAP: Record<ExportFormat, 'DOCX' | 'PDF' | 'MARKDOWN'> = {
+  DOCX: 'DOCX',
+  PDF: 'PDF',
+  Markdown: 'MARKDOWN',
+};
+
+export async function exportDocument(input: { title: string; content: string; format: ExportFormat }): Promise<Blob> {
+  try {
+    const res = await http.post(
+      '/export',
+      { title: input.title, content: input.content, format: EXPORT_FORMAT_MAP[input.format] },
+      { responseType: 'blob' },
+    );
+    return res.data as Blob;
+  } catch (e) {
+    throw toApiError(e, '/api/v1/export');
+  }
 }

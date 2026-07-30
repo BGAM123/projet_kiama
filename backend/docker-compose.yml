@@ -55,7 +55,38 @@ services:
       minio:
         condition: service_healthy
     entrypoint: >
-      /bin/sh -c " mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-docuai} ${MINIO_ROOT_PASSWORD:-docuai-minio-secret} && mc mb --ignore-existing local/${MINIO_BUCKET_SOURCES:-docuai-sources} && mc mb --ignore-existing local/${MINIO_BUCKET_REFERENCES:-docuai-references} && mc mb --ignore-existing local/${MINIO_BUCKET_EXPORTS:-docuai-exports} && mc anonymous set none local/${MINIO_BUCKET_SOURCES:-docuai-sources} && mc anonymous set none local/${MINIO_BUCKET_REFERENCES:-docuai-references} && mc anonymous set none local/${MINIO_BUCKET_EXPORTS:-docuai-exports} "
+      /bin/sh -c "
+      mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-docuai} ${MINIO_ROOT_PASSWORD:-docuai-minio-secret} &&
+      mc mb --ignore-existing local/${MINIO_BUCKET_SOURCES:-docuai-sources} &&
+      mc mb --ignore-existing local/${MINIO_BUCKET_REFERENCES:-docuai-references} &&
+      mc mb --ignore-existing local/${MINIO_BUCKET_EXPORTS:-docuai-exports} &&
+      mc anonymous set none local/${MINIO_BUCKET_SOURCES:-docuai-sources} &&
+      mc anonymous set none local/${MINIO_BUCKET_REFERENCES:-docuai-references} &&
+      mc anonymous set none local/${MINIO_BUCKET_EXPORTS:-docuai-exports}
+      "
+
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: docuai-mailhog
+    ports:
+      - "1025:1025" # SMTP
+      - "8025:8025" # Interface web (consultation des e-mails envoyés en dev)
+
+  # ClamAV en profil optionnel (section 8 du prompt maître : "point
+  # d'intégration ClamAV optionnel, activable par configuration"). Non démarré
+  # par défaut (`docker compose up` ne le lance pas) pour ne pas alourdir le
+  # socle de développement ; activer avec `docker compose --profile av up`.
+  clamav:
+    image: clamav/clamav:stable
+    container_name: docuai-clamav
+    profiles: [ "av" ]
+    ports:
+      - "${CLAMAV_PORT:-3310}:3310"
+    healthcheck:
+      test: [ "CMD", "clamdcheck" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
 
   backend:
     build:
@@ -69,6 +100,8 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+      mailhog:
+        condition: service_started
     environment:
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-dev}
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-docuai}
@@ -80,34 +113,32 @@ services:
       SPRING_MAIL_PORT: 1025
       SPRING_MAIL_PROPERTIES_MAIL_SMTP_AUTH: "false"
       SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_ENABLE: "false"
-      MINIO_URL: http://minio:9000
       MINIO_ENDPOINT: http://minio:9000
       MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-docuai}
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-docuai-minio-secret}
-      MINIO_BUCKET_NAME: ${MINIO_BUCKET_SOURCES:-docuai-sources}
       MINIO_BUCKET_SOURCES: ${MINIO_BUCKET_SOURCES:-docuai-sources}
       MINIO_BUCKET_REFERENCES: ${MINIO_BUCKET_REFERENCES:-docuai-references}
       MINIO_BUCKET_EXPORTS: ${MINIO_BUCKET_EXPORTS:-docuai-exports}
       DOCUAI_JWT_ISSUER: ${DOCUAI_JWT_ISSUER:-docuai}
       DOCUAI_JWT_PRIVATE_KEY: ${DOCUAI_JWT_PRIVATE_KEY:-}
       DOCUAI_JWT_PUBLIC_KEY: ${DOCUAI_JWT_PUBLIC_KEY:-}
+      DOCUAI_JWT_ACCESS_TTL_SECONDS: ${DOCUAI_JWT_ACCESS_TTL_SECONDS:-900}
+      DOCUAI_JWT_REFRESH_TTL_SECONDS: ${DOCUAI_JWT_REFRESH_TTL_SECONDS:-604800}
       DOCUAI_ADMIN_BOOTSTRAP_PASSWORD: ${DOCUAI_ADMIN_BOOTSTRAP_PASSWORD:-ChangeMe!2026}
+      DOCUAI_MAIL_FROM: ${DOCUAI_MAIL_FROM:-no-reply@docuai.local}
+      DOCUAI_FRONTEND_URL: ${DOCUAI_FRONTEND_URL:-http://localhost:3000}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DOCUAI_CLAMAV_ENABLED: ${DOCUAI_CLAMAV_ENABLED:-false}
+      DOCUAI_CLAMAV_HOST: clamav
+      DOCUAI_CLAMAV_PORT: ${CLAMAV_PORT:-3310}
     ports:
       - "${BACKEND_PORT:-8080}:8080"
     restart: unless-stopped
-
-  mailhog:
-    image: mailhog/mailhog:latest
-    container_name: docuai-mailhog
-    ports:
-      - "1025:1025" # SMTP
-      - "8025:8025" # Interface Web
 
 volumes:
   postgres-data:

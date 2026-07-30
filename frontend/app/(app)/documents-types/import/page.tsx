@@ -25,9 +25,15 @@ import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Progress } from '@/components/ui/progress';
 import { useCategories } from '@/lib/hooks/queries';
-import { importDocumentType } from '@/lib/api/client';
+import { importDocumentType, uploadAndExtractDocument } from '@/lib/api/client';
 import { useAuth } from '@/lib/auth-store';
 import type { Category } from '@/types';
+
+// Alignée sur spring.servlet.multipart.max-file-size (application.yml) et le
+// cahier des charges (25 Mo) — le texte affichait auparavant "10 Mo max" sans
+// aucune validation JS réelle (écart 8.2 du rapport d'écarts).
+const MAX_FILE_SIZE_MB = 25;
+const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
 
 const schema = z.object({
   name: z.string().min(3, 'Le nom doit contenir au moins 3 caractères.'),
@@ -81,6 +87,10 @@ export default function ImportDocumentTypePage() {
       toast.error('Format non supporté', { description: 'Formats acceptés : .docx, .pdf, .md, .txt' });
       return;
     }
+    if (f.size > MAX_FILE_SIZE_BYTES) {
+      toast.error('Fichier trop volumineux', { description: `La taille maximale autorisée est de ${MAX_FILE_SIZE_MB} Mo.` });
+      return;
+    }
     setFile(f);
     if (!watch('name')) setValue('name', f.name.replace(/\.[^.]+$/, ''));
   }
@@ -89,6 +99,25 @@ export default function ImportDocumentTypePage() {
     setExtracting(true);
     setProgress(0);
     setStepIndex(0);
+
+    // Extraction réelle (Tika + MinIO) via POST /api/v1/documents/upload —
+    // remplace l'ancienne simulation pure setTimeout. Le texte extrait n'est
+    // pas encore exploité plus loin car il n'existe pas de endpoint backend
+    // pour créer un Document Type à partir de ce contenu (écart 1.2/8.4,
+    // hors périmètre validé) : la structure est donc toujours créée côté
+    // mock ci-dessous (importMut), mais au moins l'extraction elle-même est
+    // réelle et valide le fichier côté serveur (taille, type MIME).
+    if (file) {
+      try {
+        setStepIndex(0);
+        await uploadAndExtractDocument(file);
+      } catch (e) {
+        setExtracting(false);
+        toast.error("Échec de l'extraction", { description: e instanceof Error ? e.message : undefined });
+        return;
+      }
+    }
+
     for (let i = 0; i < STEPS.length; i++) {
       setStepIndex(i);
       await new Promise((r) => setTimeout(r, 650 + Math.random() * 400));
@@ -121,7 +150,7 @@ export default function ImportDocumentTypePage() {
         <Card>
           <CardHeader>
             <CardTitle className="text-lg">Fichier source</CardTitle>
-            <CardDescription>Formats acceptés : .docx, .pdf, .md, .txt — 10 Mo max.</CardDescription>
+            <CardDescription>Formats acceptés : .docx, .pdf, .md, .txt — {MAX_FILE_SIZE_MB} Mo max.</CardDescription>
           </CardHeader>
           <CardContent>
             <div

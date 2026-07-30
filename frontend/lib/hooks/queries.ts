@@ -9,6 +9,7 @@ import {
   getGeneration,
   getStructure,
   listUsers,
+  listRoles,
   listAiConfigs,
   listAuditLogs,
   listNotifications,
@@ -28,6 +29,7 @@ import type {
   Message,
   Notification,
   ReferenceDocument,
+  Role,
   User,
 } from '@/types';
 
@@ -83,6 +85,13 @@ export function useUsers() {
   return useQuery<User[]>({
     queryKey: ['users'],
     queryFn: async () => (await listUsers()).data as User[],
+  });
+}
+
+export function useRoles() {
+  return useQuery<Role[]>({
+    queryKey: ['roles'],
+    queryFn: async () => (await listRoles()).data as Role[],
   });
 }
 

@@ -12,8 +12,12 @@
     </parent>
 
     <artifactId>docuai-api</artifactId>
-    <name>DocuAI API</name>
-    <description>Contrôleurs REST, GlobalExceptionHandler, springdoc-openapi, application principale Spring Boot.</description>
+    <name>docuai-api</name>
+    <description>
+        Présentation + application : contrôleurs REST (thin, validation Bean
+        Validation), services applicatifs (orchestration métier, transactions),
+        point d'entrée Spring Boot, migrations Flyway, configuration.
+    </description>
 
     <dependencies>
         <dependency>
@@ -73,6 +77,11 @@
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-registry-prometheus</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mapstruct</groupId>
+            <artifactId>mapstruct</artifactId>
         </dependency>
         <dependency>
             <groupId>org.projectlombok</groupId>
@@ -103,13 +112,11 @@
     </dependencies>
 
     <build>
+        <finalName>docuai-api</finalName>
         <plugins>
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
-                <configuration>
-                    <mainClass>com.docuai.api.DocuAiApplication</mainClass>
-                </configuration>
             </plugin>
         </plugins>
     </build>

@@ -12,8 +12,13 @@
     </parent>
 
     <artifactId>docuai-core</artifactId>
-    <name>DocuAI Core (domaine)</name>
-    <description>Entités de domaine, DTO, ports, règles métier pures.</description>
+    <name>docuai-core</name>
+    <description>
+        Domaine : entités JPA, ports (interfaces de repository), règles métier.
+        Contient aussi les adaptateurs JPA (Spring Data) qui implémentent ces
+        ports — une entorse pragmatique à l'hexagonale pure, assumée par le
+        prompt maître (« hexagonale simplifiée », section 4.1).
+    </description>
 
     <dependencies>
         <dependency>
@@ -29,15 +34,14 @@
             <artifactId>mapstruct</artifactId>
         </dependency>
         <dependency>
+            <groupId>com.pgvector</groupId>
+            <artifactId>pgvector</artifactId>
+        </dependency>
+        <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
             <optional>true</optional>
         </dependency>
-        <dependency>
-            <groupId>com.pgvector</groupId>
-            <artifactId>pgvector</artifactId>
-        </dependency>
-
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>

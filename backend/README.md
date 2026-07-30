@@ -3,122 +3,224 @@
 API REST Spring Boot 3 / Java 21 pour l'extraction de structure de documents Word/PDF
 et la génération de nouveaux documents via une orchestration IA multi-fournisseurs.
 
-Ce dépôt contient **uniquement le backend** (aucun frontend V1). Toutes les
-fonctionnalités sont vérifiables via Swagger, Postman ou `curl`.
+Reconstruction complète démarrée le 2026-07-30 à partir du prompt maître
+(`../1785408291591_PROMPT_DocuAI_Backend_Uniquement.md` fourni par l'utilisateur).
+Voir `ARCHITECTURE.md` pour le détail de l'arborescence proposée.
 
 ---
 
-## État d'avancement (par blocs, section 11 du cahier)
+## État d'avancement
 
 - [x] **Bloc 1 — Socle** : structure Maven multi-module, `docker-compose.yml`,
-      migrations Flyway `V1` (schéma) et `V2` (rôles / permissions / compte admin).
-- [x] **Bloc 2 — Sécurité** : JWT RS256, RBAC, endpoints `/auth`, `/users`, `/roles`.
-- [x] **Bloc 3 — Référentiels** : Catégories, Documents Types (CRUD, versionnement).
-- [x] **Bloc 4 — Extraction** : upload, MIME, parsers DOCX/PDF, arbre JSON.
-- [x] **Bloc 5 — IA** : adaptateurs Stratégie, Prompt Builder, RAG pgvector, validator.
-- [x] **Bloc 6 — Génération** : conversations, orchestration, streaming SSE.
-- [x] **Bloc 7 — Export** : DOCX / PDF / Markdown.
-- [x] **Bloc 8 — Transverses** : dashboard, notifications, audit, config IA.
-- [ ] **Bloc 9 — Finalisation** : durcissement, tests, Postman, docs.
+      `Dockerfile`, migrations Flyway `V1` (schéma complet) et `V2` (seed
+      rôles/permissions/comptes/catégories/Document Type d'exemple/configs IA).
+- [x] **Bloc 2 — Sécurité** : entités `Utilisateur`/`Role`/`Permission`, JWT
+      **RS256** (`PemKeyReader` + `JwtKeyConfig`), `TokenBlacklistService`
+      (Redis, révocation + rotation du refresh token), RBAC par
+      `@PreAuthorize`, `/auth/login`, `/auth/refresh`, `/auth/logout`,
+      `/auth/password`, `/users` (CRUD complet + reset mot de passe admin),
+      `/roles` (CRUD, suppression bloquée si le rôle est encore assigné).
+      Mappers MapStruct (`UserMapper`, `RoleMapper`, `PermissionMapper`).
+      **En attente de validation avant de poursuivre le Bloc 3.**
+- [x] **E-mail de bienvenue** (anticipé sur le Bloc 8) : `POST /users` publie
+      un `UserCreatedEvent` après le `save()` (mot de passe en clair jamais
+      persisté ni renvoyé) ; `UserWelcomeEmailListener` l'écoute en
+      `@TransactionalEventListener(phase = AFTER_COMMIT)` + `@Async`
+      (`AsyncConfig`) pour envoyer l'e-mail via `MailService`
+      (`JavaMailSender`) sans jamais bloquer ni faire échouer la requête HTTP,
+      même si Mailhog/le relais SMTP est indisponible (erreur simplement
+      loguée). Voir `docuai.mail.from` / `docuai.app.frontend-url` dans
+      `application.yml`.
+- [x] **Bloc 3 — Référentiels** : entités `Categorie`/`DocumentType`/
+      `DocumentStructure` (+ `StructureNode`, mappé nativement en JSONB via
+      Hibernate 6 `@JdbcTypeCode(SqlTypes.JSON)`). `/categories` : CRUD complet
+      (lecture ouverte à tout utilisateur authentifié, mutations réservées à
+      `CATEGORY_MANAGE`), suppression bloquée si une catégorie est encore
+      utilisée (`CATEGORY_IN_USE`, même pattern que `ROLE_IN_USE`).
+      `/document-types` : lecture (`DOCUMENT_TYPE_READ`, filtres optionnels
+      `categoryId`/`status`), modification nom/description/catégorie et
+      archivage logique (`DOCUMENT_TYPE_MANAGE`) ; `GET`/`PUT
+      .../{id}/structure` pour consulter/corriger l'arbre extrait. L'import de
+      fichier et le déclenchement d'extraction restent au Bloc 4 (aucun
+      `DocumentType` ne peut donc encore être créé via l'API à ce stade — seul
+      celui seedé en V2 existe).
+      **En attente de validation avant de poursuivre le Bloc 4.**
+- [ ] Bloc 4 — Extraction documentaire (upload, Tika/POI/PDFBox, arbre de structure)
+- [ ] Bloc 5 — IA (adaptateurs OpenAI/Claude/Ollama, Prompt Builder, RAG, Structural Validator)
+- [ ] Bloc 6 — Génération (`/conversations`, `/generations`, streaming SSE)
+- [ ] Bloc 7 — Export (DOCX/PDF/Markdown)
+- [ ] Bloc 8 — Transverses (dashboard, notifications, journal d'activité, `/ai-configs`)
+- [ ] Bloc 9 — Finalisation (durcissement OWASP, tests, Postman/.http, doc Swagger)
 
 ---
 
-## Arborescence des modules
-
-```
-docuai-parent/                     (pom.xml)
-├── docuai-core/                   entités JPA, DTO, ports, règles métier
-├── docuai-security/               JWT RS256, RBAC, filtres Spring Security
-├── docuai-extraction-client/      Tika, Apache POI (DOCX), PDFBox (PDF)
-├── docuai-ai-orchestration/       adaptateurs multi-fournisseurs, Prompt Builder,
-│                                  RAG pgvector, Structural Validator, Assembler
-├── docuai-export/                 exporteurs DOCX / PDF / Markdown
-└── docuai-api/                    contrôleurs REST, main app, migrations Flyway
-    └── src/main/resources/db/migration/
-        ├── V1__init_schema.sql
-        └── V2__seed_roles_permissions.sql
-```
-
----
-
-## Lancer en local
-
-**Prérequis** : Docker Desktop (≥ 4.x), Docker Compose v2.
+## Lancer l'infrastructure (ce qui est vérifiable dès ce Bloc 1)
 
 ```bash
+cd backend
 cp .env.example .env
-docker compose up -d postgres redis minio minio-init
 ```
 
-À ce stade du Bloc 1, le service `backend` peut être bâti mais n'expose encore
-aucun endpoint (Bloc 2 apporte l'authentification). Pour uniquement vérifier
-que l'infrastructure est saine, arrête-toi ici.
-
-### Vérifier le socle
+Générer une paire de clés RS256 (obligatoire dès le Bloc 2 pour que le backend
+démarre) :
 
 ```bash
+openssl genpkey -algorithm RSA -out jwt_private.pem -pkeyopt rsa_keygen_bits:2048
+openssl rsa -in jwt_private.pem -pubout -out jwt_public.pem
+```
+
+⚠️ Utiliser `genpkey` (format PKCS#8, `-----BEGIN PRIVATE KEY-----`) et non
+`genrsa` (format PKCS#1, `-----BEGIN RSA PRIVATE KEY-----`) : `PemKeyReader`
+(`docuai-security`) attend du PKCS#8, lisible nativement par
+`java.security.KeyFactory` sans dépendance supplémentaire (pas de Bouncy
+Castle). Un fichier `genrsa` échouera au démarrage avec une erreur explicite.
+
+Coller le contenu des deux fichiers `.pem` dans `.env` (`DOCUAI_JWT_PRIVATE_KEY`
+/ `DOCUAI_JWT_PUBLIC_KEY`), avec des `\n` littéraux à la place des retours à
+la ligne.
+
+```bash
+docker compose up -d postgres redis minio minio-init mailhog
 docker compose ps
 ```
 
-Les 3 conteneurs (`postgres`, `redis`, `minio`) doivent être `healthy`, et
-`minio-init` doit être `Exited (0)`.
+Les conteneurs `postgres`, `redis`, `minio` doivent être `healthy`, et
+`minio-init` `Exited (0)`.
 
-### Vérifier que les migrations Flyway s'appliquent
+### Vérifier le socle + les migrations
 
-Les migrations tourneront automatiquement au premier démarrage du backend
-(Bloc 2). Pour les inspecter dès maintenant :
+```bash
+docker compose up -d --build backend
+docker compose logs backend | grep -i flyway
+```
+
+Puis :
 
 ```bash
 docker exec -it docuai-postgres psql -U docuai -d docuai -c "\dt"
 docker exec -it docuai-postgres psql -U docuai -d docuai -c "SELECT nom FROM role;"
-docker exec -it docuai-postgres psql -U docuai -d docuai -c "SELECT code FROM permission;"
+docker exec -it docuai-postgres psql -U docuai -d docuai -c "SELECT code FROM permission ORDER BY code;"
+docker exec -it docuai-postgres psql -U docuai -d docuai -c "SELECT nom, statut FROM document_type;"
+curl -s http://localhost:8080/actuator/health
 ```
 
-*(Les tables n'existent qu'après le premier démarrage du backend qui déclenche
-Flyway ; ou tu peux appliquer les fichiers `V1`/`V2` manuellement.)*
+`/actuator/health` doit répondre `{"status":"UP"}` si le socle est sain.
+
+### Tester le Bloc 2 (sécurité)
+
+```bash
+# 1. Connexion admin — récupère accessToken/refreshToken
+curl -s -X POST http://localhost:8080/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@docuai.local","password":"ChangeMe!2026"}' | tee /tmp/login.json
+
+ACCESS=$(jq -r '.data.accessToken' /tmp/login.json)
+REFRESH=$(jq -r '.data.refreshToken' /tmp/login.json)
+
+# 2. Route protégée avec le jeton d'accès
+curl -s http://localhost:8080/api/v1/users -H "Authorization: Bearer $ACCESS"
+
+# 3. Sans jeton -> 401 uniforme { "error": { "code": "UNAUTHORIZED", ... } }
+curl -s http://localhost:8080/api/v1/users
+
+# 4. Connexion utilisateur non-admin -> 403 attendu sur /users (RBAC)
+curl -s -X POST http://localhost:8080/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"utilisateur@docuai.local","password":"ChangeMe!2026"}' | tee /tmp/login-user.json
+USER_ACCESS=$(jq -r '.data.accessToken' /tmp/login-user.json)
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8080/api/v1/users -H "Authorization: Bearer $USER_ACCESS"
+# -> 403
+
+# 5. Rafraîchissement (rotation : REFRESH devient invalide après cet appel)
+curl -s -X POST http://localhost:8080/api/v1/auth/refresh \
+  -H "Content-Type: application/json" -d "{\"refreshToken\":\"$REFRESH\"}"
+
+# 6. Déconnexion puis réutilisation du refresh token -> doit échouer (liste noire)
+curl -s -X POST http://localhost:8080/api/v1/auth/logout \
+  -H "Content-Type: application/json" -d "{\"refreshToken\":\"$REFRESH\"}"
+curl -s -X POST http://localhost:8080/api/v1/auth/refresh \
+  -H "Content-Type: application/json" -d "{\"refreshToken\":\"$REFRESH\"}"
+# -> error INVALID_REFRESH_TOKEN
+
+# 7. Changement de mot de passe (soi-même, authentifié)
+curl -s -X POST http://localhost:8080/api/v1/auth/password \
+  -H "Authorization: Bearer $ACCESS" -H "Content-Type: application/json" \
+  -d '{"currentPassword":"ChangeMe!2026","newPassword":"NouveauMdp!2026"}'
+```
+
+Ou via Swagger UI (http://localhost:8080/swagger-ui.html) : `POST /auth/login`,
+copier `data.accessToken`, cliquer "Authorize" en haut à droite, coller le
+jeton, puis appeler `GET /users`.
+
+### Tester le Bloc 3 (référentiels)
+
+```bash
+# Catégories — lecture ouverte à tout authentifié, mutations réservées ADMIN
+curl -s http://localhost:8080/api/v1/categories -H "Authorization: Bearer $ACCESS"
+curl -s -X POST http://localhost:8080/api/v1/categories \
+  -H "Authorization: Bearer $ACCESS" -H "Content-Type: application/json" \
+  -d '{"name":"Juridique","description":"Contrats et avenants"}'
+
+# Documents Types — le Document Type seedé en V2 (id fixe, pratique pour tester)
+DT_ID=00000000-0000-0000-0000-000000000001
+curl -s http://localhost:8080/api/v1/document-types -H "Authorization: Bearer $ACCESS"
+curl -s http://localhost:8080/api/v1/document-types?status=ACTIF -H "Authorization: Bearer $ACCESS"
+curl -s http://localhost:8080/api/v1/document-types/$DT_ID/structure -H "Authorization: Bearer $ACCESS"
+
+# Utilisateur non-admin : DOCUMENT_TYPE_READ ok, DOCUMENT_TYPE_MANAGE refusé (403)
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8080/api/v1/document-types \
+  -H "Authorization: Bearer $USER_ACCESS"
+curl -s -o /dev/null -w "%{http_code}\n" -X PATCH http://localhost:8080/api/v1/document-types/$DT_ID \
+  -H "Authorization: Bearer $USER_ACCESS" -H "Content-Type: application/json" -d '{"name":"x"}'
+# -> 403
+```
 
 ### Console MinIO
 
 - URL : http://localhost:9001
-- Login / mdp : valeurs de `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` (`.env`)
-- Buckets créés automatiquement par `minio-init` : `docuai-sources`,
-  `docuai-references`, `docuai-exports`.
+- Login / mot de passe : `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` (`.env`)
+- Buckets créés automatiquement par `minio-init` : `docuai-sources`, `docuai-references`, `docuai-exports`.
+
+### Mailhog (e-mails transactionnels)
+
+- Interface web : http://localhost:8025
+- L'e-mail de bienvenue envoyé à la création d'un utilisateur (`POST /users`)
+  y est visible immédiatement en dev.
 
 ---
 
-## Compte administrateur de bootstrap
+## Comptes de test (migration V2)
 
-La migration `V2` crée un compte :
+| Email | Mot de passe | Rôle |
+|---|---|---|
+| `admin@docuai.local` | `ChangeMe!2026` | ADMIN (toutes permissions) |
+| `utilisateur@docuai.local` | `ChangeMe!2026` | UTILISATEUR |
 
-- **email** : `admin@docuai.local`
-- **mot de passe** : `ChangeMe!2026` (⚠️ à rotationner dès la production)
-- rôle : `ADMIN` (toutes permissions)
-
-L'endpoint `/api/v1/auth/login` arrivera au **Bloc 2**.
+⚠️ À changer impérativement avant tout environnement partagé.
 
 ---
 
-## Ajouter un nouveau fournisseur IA (Pattern Stratégie)
+## Build local (nécessite Java 21 + Maven — non fournis dans ce dépôt)
 
-À implémenter au **Bloc 5**. Principe :
+```bash
+mvn -pl docuai-api -am clean package
+mvn -pl docuai-api -am spring-boot:run
+```
 
-1. Créer une classe `XxxAdapter implements AiProviderPort` dans
-   `docuai-ai-orchestration`.
-2. L'enregistrer dans `AiProviderFactory` (auto-découverte Spring via `@Component`).
-3. Ajouter le fournisseur à la contrainte `chk_ai_fournisseur` de
-   `ai_model_config` (nouvelle migration Flyway `V3__add_provider_xxx.sql`).
+**Important** : les fichiers de ce Bloc 1 n'ont pas pu être compilés dans
+l'environnement ayant produit ces changements (pas d'accès à Maven Central, ni
+à `mvn`/`javac`, ni à Docker depuis ce bac à sable — réseau restreint). Lancez
+`mvn -pl docuai-api -am clean package` (ou `docker compose build backend`) en
+local avant de considérer ce socle comme définitivement validé, en particulier
+pour confirmer que Flyway applique `V1`/`V2` sans erreur sur un Postgres réel.
+
+---
+
+## Ajouter un nouveau fournisseur IA (Bloc 5, Pattern Stratégie)
+
+1. Créer une classe `XxxAdapter implements AiProviderPort` dans `docuai-ai-orchestration`.
+2. L'enregistrer comme `@Component` (auto-découverte par `AiProviderFactory`).
+3. Ajouter la valeur à la contrainte `chk_ai_fournisseur` de `ai_model_config`
+   (nouvelle migration Flyway, ex. `V5__add_provider_xxx.sql`) si le fournisseur
+   n'est pas déjà dans la liste `OPENAI/CLAUDE/GEMINI/MISTRAL/OLLAMA/DEEPSEEK`.
 4. Le rendre configurable via `/api/v1/ai-configs` (Bloc 8).
-
----
-
-## Variables d'environnement clés
-
-Voir `.env.example`. Les plus sensibles :
-
-| Variable | Description |
-|---|---|
-| `POSTGRES_PASSWORD` | mot de passe Postgres (dev par défaut) |
-| `MINIO_ROOT_PASSWORD` | mot de passe MinIO |
-| `DOCUAI_JWT_PRIVATE_KEY` / `DOCUAI_JWT_PUBLIC_KEY` | paire RSA PEM inline pour JWT RS256 (Bloc 2) |
-| `DOCUAI_ADMIN_BOOTSTRAP_PASSWORD` | mot de passe initial du compte admin |
-| `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OLLAMA_BASE_URL`, ... | clés fournisseurs IA (Bloc 5) |
