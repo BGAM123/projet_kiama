@@ -1,5 +1,6 @@
 package com.docuai.api.exception;
 
+import com.docuai.ai.exception.AiProviderException;
 import com.docuai.api.dto.ApiResponse;
 import com.docuai.extraction.storage.ObjectStorageException;
 import com.docuai.extraction.text.TextExtractionException;
@@ -83,6 +84,12 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiResponse<Object>> handleObjectStorage(ObjectStorageException ex, HttpServletRequest request) {
         log.error("Échec de stockage objet (MinIO) sur {} : {}", request.getRequestURI(), ex.getMessage(), ex);
         return buildErrorResponse("STORAGE_UNAVAILABLE", ex.getMessage(), request.getRequestURI(), HttpStatus.SERVICE_UNAVAILABLE);
+    }
+
+    @ExceptionHandler(AiProviderException.class)
+    public ResponseEntity<ApiResponse<Object>> handleAiProvider(AiProviderException ex, HttpServletRequest request) {
+        log.warn("Échec d'appel à un fournisseur IA sur {} : {}", request.getRequestURI(), ex.getMessage(), ex);
+        return buildErrorResponse("AI_PROVIDER_UNAVAILABLE", ex.getMessage(), request.getRequestURI(), HttpStatus.SERVICE_UNAVAILABLE);
     }
 
     @ExceptionHandler(Exception.class)

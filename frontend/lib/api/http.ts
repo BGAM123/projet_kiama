@@ -2,9 +2,9 @@
 // les fonctions mock de lib/api/client.ts (voir commentaire en tête de ce
 // fichier). Périmètre connecté à ce stade : auth, users, roles, catégories
 // (Bloc 3), document-types + structure (Bloc 3), upload/extraction, export,
-// notifications, audit logs. Le reste (import de Document Type/pipeline
-// d'extraction — Bloc 4 —, conversations, générations, streaming, ai-configs,
-// dashboard) reste mocké faute d'endpoints backend.
+// notifications, audit logs, conversations/messages/documents de référence
+// (Bloc 6), générations + streaming SSE (Bloc 6). Le reste (ai-configs,
+// dashboard, export réel) reste mocké faute d'endpoints backend (Blocs 7/8).
 
 import axios, { AxiosError, type InternalAxiosRequestConfig } from 'axios';
 import type { ApiErrorBody } from '@/types';
@@ -30,6 +30,17 @@ let authHooks: AuthHooks | null = null;
 
 export function setAuthHooks(hooks: AuthHooks): void {
   authHooks = hooks;
+}
+
+/**
+ * Jeton d'accès courant, pour les rares appels qui ne passent pas par
+ * l'instance axios `http` ci-dessus (donc sans l'intercepteur de requête) —
+ * aujourd'hui uniquement le flux SSE de génération (lib/api/generator.ts),
+ * consommé via `fetch` brut car `EventSource` ne permet pas d'en-tête
+ * `Authorization` personnalisé.
+ */
+export function getCurrentAccessToken(): string | null {
+  return authHooks?.getAccessToken() ?? null;
 }
 
 http.interceptors.request.use((config: InternalAxiosRequestConfig) => {

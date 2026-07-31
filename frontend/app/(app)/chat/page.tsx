@@ -49,6 +49,7 @@ import {
   sendMessage,
   addReferenceDocument,
   startGeneration,
+  getGeneration,
   updateGeneration,
   exportDocument,
 } from '@/lib/api/client';
@@ -158,7 +159,7 @@ export default function GenerateDocumentPage() {
   });
 
   const addRef = useMutation({
-    mutationFn: async (fileName: string) => (await addReferenceDocument(activeId!, fileName)).data,
+    mutationFn: async (file: File) => (await addReferenceDocument(activeId!, file)).data,
     onSuccess: () => qc.invalidateQueries({ queryKey: ['ref-docs', activeId] }),
   });
 
@@ -181,7 +182,7 @@ export default function GenerateDocumentPage() {
       return;
     }
     for (const f of Array.from(files)) {
-      await addRef.mutateAsync(f.name);
+      await addRef.mutateAsync(f);
     }
     toast.success(`${files.length} document(s) de référence ajouté(s).`);
   }
@@ -223,12 +224,20 @@ export default function GenerateDocumentPage() {
           setGenProgress(100);
         }
       }
-      await updateGeneration(doc.id, { status: 'GENERE' });
+      // Le statut final (GENERE, ou ECHEC si une section a échoué) est déjà
+      // positionné côté serveur à la fin du flux SSE — on relit l'état réel
+      // plutôt que de le forcer nous-mêmes (le PATCH /generations/{id} ne
+      // sert qu'à l'édition manuelle et écraserait ce statut par EN_EDITION).
+      const finalDoc = (await getGeneration(doc.id)).data;
+      setActiveGen(finalDoc);
       qc.invalidateQueries({ queryKey: ['generation', doc.id] });
-      toast.success('Document généré', { description: 'Vous pouvez l\'éditer ou l\'exporter.' });
+      if (finalDoc?.status === 'ECHEC') {
+        toast.error('La génération a échoué pour une ou plusieurs sections.');
+      } else {
+        toast.success('Document généré', { description: 'Vous pouvez l\'éditer ou l\'exporter.' });
+      }
     } catch (e) {
       toast.error('La génération a échoué.', { description: e instanceof Error ? e.message : undefined });
-      if (activeGen) await updateGeneration(activeGen.id, { status: 'ECHEC' });
     } finally {
       setGenerating(false);
       setCurrentSection(null);

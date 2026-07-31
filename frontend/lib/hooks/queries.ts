@@ -7,6 +7,7 @@ import {
   listDocumentTypes,
   listCategories,
   getGeneration,
+  listGenerations,
   getStructure,
   listUsers,
   listRoles,
@@ -70,6 +71,15 @@ export function useGeneration(id: string | null) {
     queryKey: ['generation', id],
     queryFn: async () => (await getGeneration(id!)).data as GeneratedDocument,
     enabled: !!id,
+  });
+}
+
+export function useGenerations() {
+  const session = useAuth((s) => s.session);
+  return useQuery<GeneratedDocument[]>({
+    queryKey: ['all-generations', session?.user.id],
+    queryFn: async () => (await listGenerations(session!.user.id)).data as GeneratedDocument[],
+    enabled: !!session,
   });
 }
 

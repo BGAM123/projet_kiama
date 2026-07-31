@@ -4,27 +4,27 @@
 // (login/refresh/logout/password), users (CRUD complet + reset mot de passe
 // admin), roles (lecture), catégories (CRUD complet, Bloc 3), document-types
 // (CRUD référentiel + structure, Bloc 3 ; import/ré-extraction/validation,
-// Bloc 4), upload/extraction bas niveau, export, notifications, audit logs.
-// Les fonctions encore mockées ci-dessous n'ont pas d'endpoint backend
-// correspondant (conversations, générations, streaming, ai-configs,
-// dashboard) et continuent de résoudre contre les fixtures en mémoire.
+// Bloc 4), upload/extraction bas niveau, notifications, audit logs,
+// conversations/messages/documents de référence + générations/streaming
+// (Bloc 6). Les fonctions encore mockées ci-dessous n'ont pas d'endpoint
+// backend correspondant (ai-configs, dashboard, export réel — Blocs 7/8) et
+// continuent de résoudre contre les fixtures en mémoire.
 //
 // Chaque fonction migrée garde exactement la même signature qu'avant, pour
 // que les hooks React Query et les composants qui les consomment n'aient pas
-// à changer.
+// à changer — à l'exception d'addReferenceDocument, qui doit désormais
+// recevoir le fichier réel (File) et non plus seulement son nom, puisque le
+// vrai backend (contrairement au mock) a besoin du contenu pour l'uploader
+// et l'indexer (RAG).
 
 import { http, toApiError } from './http';
 import {
   aiModelConfigs,
   auditLogs,
   categories,
-  conversations,
   documentTypes,
   generatedDocuments,
-  messages,
   notifications,
-  referenceDocuments,
-  structures,
 } from './fixtures';
 import type {
   AiModelConfig,
@@ -35,6 +35,7 @@ import type {
   DocumentStructure,
   DocumentType,
   GeneratedDocument,
+  GenerationSection,
   LoginPayload,
   Message,
   Notification,
@@ -71,8 +72,6 @@ async function guard<T>(fn: () => T | Promise<T>): Promise<ApiSuccess<T>> {
   await delay();
   return ok(await fn());
 }
-
-const uid = (p: string) => `${p}${Math.random().toString(36).slice(2, 9)}`;
 
 // ---------------------------------------------------------------------------
 // Adaptateurs backend réel — le backend Spring Boot ne renvoie pas exactement
@@ -536,55 +535,169 @@ export async function updateStructure(documentTypeId: string, tree: DocumentStru
 }
 
 // ---------------------------------------------------------------------------
-// Conversations & messages
+// Conversations & messages — branché sur les vrais endpoints /conversations
+// du Bloc 6 (permission CONVERSATION_USE, cf. ConversationController).
+// L'envoi d'un message (sendMessage) déclenche réellement un appel IA côté
+// serveur pour la réponse assistant — celle-ci n'est pas renvoyée par
+// l'appel lui-même (qui renvoie le message utilisateur créé, comme le mock)
+// mais apparaît après invalidation de la query ['messages', conversationId].
 // ---------------------------------------------------------------------------
 
+interface BackendConversationDTO {
+  id: string;
+  userId: string;
+  documentTypeId: string;
+  title?: string | null;
+  createdAt: string;
+}
+
+function adaptConversationDTO(dto: BackendConversationDTO): Conversation {
+  return { id: dto.id, userId: dto.userId, documentTypeId: dto.documentTypeId, title: dto.title ?? '', createdAt: dto.createdAt };
+}
+
+interface BackendMessageDTO {
+  id: string;
+  conversationId: string;
+  role: string;
+  content: string;
+  createdAt: string;
+}
+
+function adaptMessageDTO(dto: BackendMessageDTO): Message {
+  return { id: dto.id, conversationId: dto.conversationId, role: dto.role as Message['role'], content: dto.content, createdAt: dto.createdAt };
+}
+
 export async function listConversations(userId: string): Promise<ApiSuccess<Conversation[]>> {
-  return guard(() => conversations.filter((c) => c.userId === userId));
+  try {
+    const res = await http.get<{ data: BackendConversationDTO[] }>('/conversations', { params: { userId } });
+    return ok(res.data.data.map(adaptConversationDTO));
+  } catch (e) {
+    throw toApiError(e, '/api/v1/conversations');
+  }
 }
 
 export async function createConversation(input: { userId: string; documentTypeId: string; title: string }): Promise<ApiSuccess<Conversation>> {
-  return guard(() => {
-    const c: Conversation = { id: uid('cv'), createdAt: new Date().toISOString(), ...input };
-    conversations.push(c);
-    return c;
-  });
+  try {
+    const res = await http.post<{ data: BackendConversationDTO }>('/conversations', input);
+    return ok(adaptConversationDTO(res.data.data));
+  } catch (e) {
+    throw toApiError(e, '/api/v1/conversations');
+  }
 }
 
 export async function listMessages(conversationId: string): Promise<ApiSuccess<Message[]>> {
-  return guard(() => messages.filter((m) => m.conversationId === conversationId).sort((a, b) => a.createdAt.localeCompare(b.createdAt)));
+  try {
+    const res = await http.get<{ data: BackendMessageDTO[] }>(`/conversations/${conversationId}/messages`);
+    return ok(res.data.data.map(adaptMessageDTO));
+  } catch (e) {
+    throw toApiError(e, `/api/v1/conversations/${conversationId}/messages`);
+  }
 }
 
 export async function sendMessage(conversationId: string, content: string): Promise<ApiSuccess<Message>> {
-  return guard(() => {
-    const m: Message = { id: uid('m'), conversationId, role: 'user', content, createdAt: new Date().toISOString() };
-    messages.push(m);
-    // Simulated assistant echo (real generation is launched separately)
-    const reply: Message = { id: uid('m'), conversationId, role: 'assistant', content: "C'est noté. Ajustez les paramètres à droite puis cliquez sur « Générer le document ».", createdAt: new Date().toISOString() };
-    messages.push(reply);
-    return m;
-  });
+  try {
+    const res = await http.post<{ data: BackendMessageDTO }>(`/conversations/${conversationId}/messages`, { content });
+    return ok(adaptMessageDTO(res.data.data));
+  } catch (e) {
+    throw toApiError(e, `/api/v1/conversations/${conversationId}/messages`);
+  }
 }
 
 // ---------------------------------------------------------------------------
-// Reference documents
+// Reference documents — upload réel (MinIO + indexation RAG côté serveur,
+// dégradée sans échouer l'import si l'indexation échoue).
 // ---------------------------------------------------------------------------
 
-export async function addReferenceDocument(conversationId: string, fileName: string): Promise<ApiSuccess<ReferenceDocument>> {
-  return guard(() => {
-    const rd: ReferenceDocument = { id: uid('rd'), conversationId, fileName, storagePath: `/refs/${conversationId}/${fileName}`, importedAt: new Date().toISOString() };
-    referenceDocuments.push(rd);
-    return rd;
-  });
+interface BackendReferenceDocumentDTO {
+  id: string;
+  conversationId: string;
+  fileName: string;
+  storagePath: string;
+  importedAt: string;
+}
+
+function adaptReferenceDocumentDTO(dto: BackendReferenceDocumentDTO): ReferenceDocument {
+  return { id: dto.id, conversationId: dto.conversationId, fileName: dto.fileName, storagePath: dto.storagePath, importedAt: dto.importedAt };
+}
+
+export async function addReferenceDocument(conversationId: string, file: File): Promise<ApiSuccess<ReferenceDocument>> {
+  try {
+    const form = new FormData();
+    // Ne PAS fixer le header Content-Type manuellement, cf. uploadAndExtractDocument.
+    form.append('file', file);
+    const res = await http.post<{ data: BackendReferenceDocumentDTO }>(`/conversations/${conversationId}/reference-documents`, form);
+    return ok(adaptReferenceDocumentDTO(res.data.data));
+  } catch (e) {
+    throw toApiError(e, `/api/v1/conversations/${conversationId}/reference-documents`);
+  }
 }
 
 export async function listReferenceDocuments(conversationId: string): Promise<ApiSuccess<ReferenceDocument[]>> {
-  return guard(() => referenceDocuments.filter((r) => r.conversationId === conversationId));
+  try {
+    const res = await http.get<{ data: BackendReferenceDocumentDTO[] }>(`/conversations/${conversationId}/reference-documents`);
+    return ok(res.data.data.map(adaptReferenceDocumentDTO));
+  } catch (e) {
+    throw toApiError(e, `/api/v1/conversations/${conversationId}/reference-documents`);
+  }
 }
 
 // ---------------------------------------------------------------------------
-// Generations
+// Generations — branché sur les vrais endpoints /generations du Bloc 6
+// (DOCUMENT_GENERATE / DOCUMENT_EDIT_OWN / HISTORY_READ_OWN|ALL, cf.
+// GenerationController). Le déroulement section par section se fait via le
+// flux SSE réel (lib/api/generator.ts#streamGeneration), pas ici.
 // ---------------------------------------------------------------------------
+
+interface BackendGenerationSectionDTO {
+  id: string;
+  label: string;
+  status: string;
+  content: string;
+}
+
+function adaptGenerationSectionDTO(dto: BackendGenerationSectionDTO): GenerationSection {
+  return { id: dto.id, label: dto.label, status: dto.status as GenerationSection['status'], content: dto.content };
+}
+
+interface BackendGeneratedDocumentDTO {
+  id: string;
+  conversationId: string;
+  documentTypeId: string;
+  userId: string;
+  status: string;
+  language: string;
+  tone: string;
+  targetLength?: string | null;
+  contentPivot?: string | null;
+  content?: string | null;
+  sections?: BackendGenerationSectionDTO[] | null;
+  createdAt: string;
+  updatedAt?: string | null;
+}
+
+function adaptGeneratedDocumentDTO(dto: BackendGeneratedDocumentDTO): GeneratedDocument {
+  return {
+    id: dto.id,
+    conversationId: dto.conversationId,
+    documentTypeId: dto.documentTypeId,
+    userId: dto.userId,
+    status: dto.status as GeneratedDocument['status'],
+    language: dto.language as GeneratedDocument['language'],
+    tone: dto.tone as GeneratedDocument['tone'],
+    // Absent côté DTO si non renseigné à la création (colonne nullable) —
+    // ne devrait pas arriver via startGeneration (toujours envoyé), repli
+    // défensif tout de même pour respecter le type non-optionnel.
+    targetLength: (dto.targetLength ?? 'MOYEN') as GeneratedDocument['targetLength'],
+    contentPivot: dto.contentPivot ?? '',
+    content: dto.content ?? '',
+    sections: (dto.sections ?? []).map(adaptGenerationSectionDTO),
+    createdAt: dto.createdAt,
+    // dateMaj (backend) reste null tant que le document n'a pas été modifié
+    // après sa création — repli sur createdAt pour respecter le type
+    // non-optionnel côté frontend.
+    updatedAt: dto.updatedAt ?? dto.createdAt,
+  };
+}
 
 export async function startGeneration(input: {
   conversationId: string;
@@ -595,49 +708,44 @@ export async function startGeneration(input: {
   targetLength: GeneratedDocument['targetLength'];
   contentPivot: string;
 }): Promise<ApiSuccess<GeneratedDocument>> {
-  return guard(() => {
-    const struct = structures.find((s) => s.documentTypeId === input.documentTypeId);
-    const sections = (struct?.tree ?? []).filter((n) => n.type !== 'cover').map((n) => ({
-      id: uid('sec'),
-      label: n.label,
-      status: 'PENDING' as const,
-      content: '',
-    }));
-    const gd: GeneratedDocument = {
-      id: uid('gd'),
-      conversationId: input.conversationId,
-      documentTypeId: input.documentTypeId,
-      userId: input.userId,
-      status: 'EN_GENERATION',
-      language: input.language,
-      tone: input.tone,
-      targetLength: input.targetLength,
-      contentPivot: input.contentPivot,
-      content: '',
-      sections,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    generatedDocuments.push(gd);
-    return gd;
-  });
+  try {
+    const res = await http.post<{ data: BackendGeneratedDocumentDTO }>('/generations', input);
+    return ok(adaptGeneratedDocumentDTO(res.data.data));
+  } catch (e) {
+    throw toApiError(e, '/api/v1/generations');
+  }
+}
+
+export async function listGenerations(userId: string): Promise<ApiSuccess<GeneratedDocument[]>> {
+  try {
+    const res = await http.get<{ data: BackendGeneratedDocumentDTO[] }>('/generations', { params: { userId } });
+    return ok(res.data.data.map(adaptGeneratedDocumentDTO));
+  } catch (e) {
+    throw toApiError(e, '/api/v1/generations');
+  }
 }
 
 export async function getGeneration(id: string): Promise<ApiSuccess<GeneratedDocument>> {
-  return guard(() => {
-    const gd = generatedDocuments.find((g) => g.id === id);
-    if (!gd) throw new ApiError('GENERATION_NOT_FOUND', 'Génération introuvable.', `/api/v1/generations/${id}`);
-    return gd;
-  });
+  try {
+    const res = await http.get<{ data: BackendGeneratedDocumentDTO }>(`/generations/${id}`);
+    return ok(adaptGeneratedDocumentDTO(res.data.data));
+  } catch (e) {
+    throw toApiError(e, `/api/v1/generations/${id}`);
+  }
 }
 
 export async function updateGeneration(id: string, patch: Partial<GeneratedDocument>): Promise<ApiSuccess<GeneratedDocument>> {
-  return guard(() => {
-    const idx = generatedDocuments.findIndex((g) => g.id === id);
-    if (idx < 0) throw new ApiError('GENERATION_NOT_FOUND', 'Génération introuvable.', `/api/v1/generations/${id}`);
-    generatedDocuments[idx] = { ...generatedDocuments[idx], ...patch, id, updatedAt: new Date().toISOString() };
-    return generatedDocuments[idx];
-  });
+  try {
+    // Le backend n'accepte que le contenu (édition manuelle) et force
+    // lui-même le statut à EN_EDITION — tout patch.status fourni ici est
+    // ignoré côté serveur (cf. GenerationService#update). Le statut
+    // GENERE/ECHEC de fin de génération est, lui, positionné automatiquement
+    // par le flux SSE (GenerationStreamService), jamais via cet appel.
+    const res = await http.patch<{ data: BackendGeneratedDocumentDTO }>(`/generations/${id}`, { content: patch.content });
+    return ok(adaptGeneratedDocumentDTO(res.data.data));
+  } catch (e) {
+    throw toApiError(e, `/api/v1/generations/${id}`);
+  }
 }
 
 // ---------------------------------------------------------------------------

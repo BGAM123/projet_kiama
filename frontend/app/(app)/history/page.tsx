@@ -2,7 +2,6 @@
 
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
-import { useQuery } from '@tanstack/react-query';
 import { History, Search, FileText, Pencil } from 'lucide-react';
 import { PageHeader } from '@/components/page-header';
 import { Card, CardContent } from '@/components/ui/card';
@@ -11,31 +10,25 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { GeneratedStatusBadge } from '@/components/status-badge';
-import { useAuth } from '@/lib/auth-store';
-import { useDocumentTypes, useCategories } from '@/lib/hooks/queries';
+import { useDocumentTypes, useCategories, useGenerations } from '@/lib/hooks/queries';
 import { formatDateTime } from '@/lib/format';
 import type { Category, DocumentType, GeneratedDocument } from '@/types';
 
 export default function HistoryPage() {
-  const session = useAuth((s) => s.session);
   const { data: documentTypes } = useDocumentTypes();
   const { data: categories } = useCategories();
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [catFilter, setCatFilter] = useState('all');
 
-  const { data: docs, isLoading } = useQuery<GeneratedDocument[]>({
-    queryKey: ['all-generations', session?.user.id],
-    queryFn: async () => {
-      const { generatedDocuments } = await import('@/lib/api/fixtures');
-      return generatedDocuments
-        .filter((g) => g.userId === session!.user.id)
-        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-    },
-    enabled: !!session,
-  });
-
-  const docsList: GeneratedDocument[] = docs ?? [];
+  // GET /api/v1/generations?userId= (Bloc 6) trie par date de création ;
+  // on retrie ici par date de mise à jour, plus pertinent pour un historique
+  // (un document édité récemment doit remonter même si créé plus tôt).
+  const { data: docs, isLoading } = useGenerations();
+  const docsList: GeneratedDocument[] = useMemo(
+    () => [...(docs ?? [])].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
+    [docs],
+  );
 
   const filtered = useMemo(() => {
     return docsList

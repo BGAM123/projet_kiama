@@ -69,8 +69,68 @@ Voir `ARCHITECTURE.md` pour le détail de l'arborescence proposée.
       brancher proprement demande d'extraire l'appel dans un collaborateur
       dédié pour passer par le proxy Spring AOP).
       **En attente de validation avant de poursuivre le Bloc 5.**
-- [ ] Bloc 5 — IA (adaptateurs OpenAI/Claude/Ollama, Prompt Builder, RAG, Structural Validator)
-- [ ] Bloc 6 — Génération (`/conversations`, `/generations`, streaming SSE)
+- [x] **Bloc 5 — IA** : `AiProviderPort` (Pattern Stratégie, `generate`/
+      `streamGenerate`) implémenté par `OpenAiAdapter`/`ClaudeAdapter`/
+      `OllamaAdapter` (réels, appels HTTP via `WebClient`, streaming SSE pour
+      OpenAI/Claude et NDJSON pour Ollama) et `GeminiAdapter`/`MistralAdapter`/
+      `DeepSeekAdapter` (structurés, non branchés par défaut — pas de
+      `@Component`, voir `docuai-ai-orchestration/README.md`).
+      `AiProviderFactory` auto-découvre les adaptateurs Spring ;
+      `GenerationOrchestrator` résout la configuration à utiliser (choix
+      explicite ou fournisseur par défaut, `ai_model_config.est_defaut`,
+      nouvelles entités `AiModelConfig`/`DocumentChunk` dans `docuai-core`) et
+      délègue à l'adaptateur résolu. `PromptBuilder` construit le prompt
+      système (structure attendue du Document Type, langue/ton/longueur
+      cible) et le prompt utilisateur (contexte RAG) ; `StructuralValidator`
+      vérifie a posteriori que les titres Markdown générés respectent la
+      structure attendue ; `ContentAssembler` recompose les sections en un
+      contenu unique. RAG : `ChunkingService` (découpage par caractères avec
+      chevauchement), `EmbeddingService` (OpenAI `text-embedding-3-small`,
+      1536 dimensions), `SimilaritySearchService` (recherche pgvector par
+      distance cosinus, opérateur `<=>`) — `DocumentChunk.embedding` est
+      mappé via `PgVectorType`, un `UserType` Hibernate 6 manuel (pas de
+      support natif pgvector dans Hibernate). Aucune migration Flyway
+      nécessaire (`ai_model_config`/`document_chunk` existaient déjà dans
+      `V1__init_schema.sql`, seedés en `V2`). Aucun endpoint REST ajouté —
+      ce bloc est uniquement l'infrastructure IA, consommée par le Bloc 6.
+      `resilience4j.retry`/`circuitbreaker` "ai-provider" restent configurés
+      mais non branchés (même choix assumé qu'au Bloc 4, voir le README du
+      module). **En attente de validation avant de poursuivre le Bloc 6.**
+- [x] **Bloc 6 — Génération** : nouvelles entités `Conversation`/`Message`/
+      `DocumentReference`/`DocumentGenere` (`docuai-core`, + énums
+      `MessageRole`/`Language`/`Tone`/`TargetLength`/`DocumentGenereStatut`,
+      `GenerationSectionNode` pour le JSONB `document_genere.sections`) ;
+      aucune migration Flyway nécessaire (tables déjà présentes dans V1).
+      `POST/GET /api/v1/conversations`, `GET/POST /api/v1/conversations/{id}/messages`
+      (`CONVERSATION_USE`) — l'envoi d'un message appelle réellement
+      `GenerationOrchestrator` (Bloc 5) pour la réponse assistant, avec repli
+      sur un message générique si aucun fournisseur IA n'est disponible.
+      `GET/POST /api/v1/conversations/{id}/reference-documents` (multipart) :
+      upload MinIO (bucket `docuai.minio.bucket-references`) + indexation RAG
+      (`ChunkingService`/`EmbeddingService`/`DocumentChunkRepository`) —
+      dégradée sans faire échouer l'import si l'indexation échoue (même
+      principe que l'extraction de structure au Bloc 4), plafonnée par
+      `docuai.generation.max-reference-documents`.
+      `POST /api/v1/generations` (`DOCUMENT_GENERATE`) crée le document généré
+      (statut `EN_GENERATION`, sections initialisées `PENDING` depuis la
+      structure du Document Type, hors nœud `cover`) ; `GET
+      /api/v1/generations/{id}/stream` (SSE, même contrat d'événements que la
+      simulation déjà stabilisée côté frontend — `progress`/`section`/`done`)
+      déroule la génération section par section sur un pool dédié
+      (`generationExecutor`, `AsyncConfig`) : `PromptBuilder` construit les
+      prompts (structure attendue + RAG des documents de référence via
+      `SimilaritySearchService`), chaque section retente jusqu'à
+      `docuai.generation.section-retry-attempts` fois en cas d'échec IA
+      (`AiProviderException`), le contenu est assemblé et persisté au fur et
+      à mesure, `StructuralValidator` vérifie a posteriori (non bloquant) que
+      les titres attendus sont présents. Statut final `GENERE` ou `ECHEC`
+      (échec partiel toléré : les sections en échec sont marquées `FAILED`
+      sans interrompre les suivantes). `GET /api/v1/generations?userId=` et
+      `GET /api/v1/generations/{id}` (`HISTORY_READ_OWN`/`HISTORY_READ_ALL`,
+      propriété vérifiée en plus de la permission) ; `PATCH
+      /api/v1/generations/{id}` (`DOCUMENT_EDIT_OWN`, propriétaire uniquement)
+      pour l'édition manuelle du contenu (statut -> `EN_EDITION`).
+      **En attente de validation avant de poursuivre le Bloc 7.**
 - [ ] Bloc 7 — Export (DOCX/PDF/Markdown)
 - [ ] Bloc 8 — Transverses (dashboard, notifications, journal d'activité, `/ai-configs`)
 - [ ] Bloc 9 — Finalisation (durcissement OWASP, tests, Postman/.http, doc Swagger)
@@ -226,6 +286,53 @@ curl -s -X POST http://localhost:8080/api/v1/document-types/$NEW_DT_ID/extract -
 # Endpoint générique d'extraction seule (sans créer de Document Type)
 curl -s -X POST http://localhost:8080/api/v1/documents/upload \
   -H "Authorization: Bearer $ACCESS" -F "file=@/chemin/vers/exemple.pdf"
+```
+
+### Tester le Bloc 6 (génération)
+
+Nécessite au moins une configuration IA active (`ai_model_config.est_defaut`,
+seedée en V2 avec OpenAI comme fournisseur par défaut) — sans clé API réelle
+renseignée dans `.env`, `POST /generations/{id}/stream` se termine en statut
+`ECHEC` (message explicite `AI_PROVIDER_UNAVAILABLE`, pas un 500).
+
+```bash
+USER_ID=$(curl -s http://localhost:8080/api/v1/users -H "Authorization: Bearer $ACCESS" | jq -r '.data[0].id')
+
+# Conversation — DT_ID = un Document Type déjà ACTIF (ex. celui du Bloc 4)
+curl -s -X POST http://localhost:8080/api/v1/conversations \
+  -H "Authorization: Bearer $ACCESS" -H "Content-Type: application/json" \
+  -d "{\"userId\":\"$USER_ID\",\"documentTypeId\":\"$NEW_DT_ID\",\"title\":\"Test Bloc 6\"}" | tee /tmp/conv.json
+CONV_ID=$(jq -r '.data.id' /tmp/conv.json)
+
+# Chat — appelle réellement le fournisseur IA par défaut
+curl -s -X POST http://localhost:8080/api/v1/conversations/$CONV_ID/messages \
+  -H "Authorization: Bearer $ACCESS" -H "Content-Type: application/json" \
+  -d '{"content":"Bonjour, peux-tu me résumer ce que ce document doit contenir ?"}'
+curl -s http://localhost:8080/api/v1/conversations/$CONV_ID/messages -H "Authorization: Bearer $ACCESS"
+
+# Document de référence (indexé pour le RAG — dégradé si OPENAI_API_KEY absente)
+curl -s -X POST http://localhost:8080/api/v1/conversations/$CONV_ID/reference-documents \
+  -H "Authorization: Bearer $ACCESS" -F "file=@/chemin/vers/reference.pdf"
+
+# Démarrer une génération — sections initialisées depuis la structure du Document Type
+curl -s -X POST http://localhost:8080/api/v1/generations \
+  -H "Authorization: Bearer $ACCESS" -H "Content-Type: application/json" \
+  -d "{\"conversationId\":\"$CONV_ID\",\"documentTypeId\":\"$NEW_DT_ID\",\"userId\":\"$USER_ID\",\"language\":\"FR\",\"tone\":\"NEUTRE\",\"targetLength\":\"MOYEN\",\"contentPivot\":\"Contrat de prestation pour un client B2B.\"}" \
+  | tee /tmp/gen.json
+GEN_ID=$(jq -r '.data.id' /tmp/gen.json)
+
+# Suivi en direct (SSE) — un événement JSON par ligne {"type":"progress"|"section"|"done", ...}
+curl -N -s http://localhost:8080/api/v1/generations/$GEN_ID/stream -H "Authorization: Bearer $ACCESS"
+
+# Relecture / édition manuelle
+curl -s http://localhost:8080/api/v1/generations/$GEN_ID -H "Authorization: Bearer $ACCESS"
+curl -s -X PATCH http://localhost:8080/api/v1/generations/$GEN_ID \
+  -H "Authorization: Bearer $ACCESS" -H "Content-Type: application/json" \
+  -d '{"content":"Contenu corrigé manuellement."}'
+
+# Utilisateur non-admin sur la génération d'un autre utilisateur -> 403
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8080/api/v1/generations/$GEN_ID \
+  -H "Authorization: Bearer $USER_ACCESS"
 ```
 
 ### Console MinIO
