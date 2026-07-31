@@ -5,14 +5,18 @@ import com.docuai.api.dto.DocumentStructureDTO;
 import com.docuai.api.dto.DocumentTypeDTO;
 import com.docuai.api.dto.UpdateDocumentTypeRequest;
 import com.docuai.api.dto.UpdateStructureRequest;
+import com.docuai.api.service.DocumentTypeExtractionService;
 import com.docuai.api.service.DocumentTypeService;
 import com.docuai.core.model.DocumentTypeStatut;
+import com.docuai.security.service.UserDetailsImpl;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 import java.util.Map;
@@ -20,9 +24,9 @@ import java.util.UUID;
 
 /**
  * CRUD référentiel des Documents Types (nom/description/catégorie) + lecture
- * et correction de leur structure. L'import de fichier et le déclenchement
- * d'extraction (POST .../import, .../extract) sont livrés au Bloc 4 — hors
- * périmètre de ce contrôleur.
+ * et correction de leur structure (Bloc 3), ainsi que l'import d'un fichier
+ * source, la (ré)extraction de sa structure et la validation/activation
+ * (Bloc 4, cf. DocumentTypeExtractionService / DocumentTypeService#validate).
  */
 @RestController
 @RequestMapping("/api/v1/document-types")
@@ -30,9 +34,12 @@ import java.util.UUID;
 public class DocumentTypeController {
 
     private final DocumentTypeService documentTypeService;
+    private final DocumentTypeExtractionService documentTypeExtractionService;
 
-    public DocumentTypeController(DocumentTypeService documentTypeService) {
+    public DocumentTypeController(DocumentTypeService documentTypeService,
+                                   DocumentTypeExtractionService documentTypeExtractionService) {
         this.documentTypeService = documentTypeService;
+        this.documentTypeExtractionService = documentTypeExtractionService;
     }
 
     @GetMapping
@@ -79,5 +86,32 @@ public class DocumentTypeController {
     public ResponseEntity<ApiResponse<DocumentStructureDTO>> updateStructure(
             @PathVariable UUID id, @Valid @RequestBody UpdateStructureRequest request) {
         return ResponseEntity.ok(ApiResponse.success(documentTypeService.updateStructure(id, request)));
+    }
+
+    @PostMapping(value = "/import", consumes = "multipart/form-data")
+    @PreAuthorize("hasAuthority('DOCUMENT_TYPE_IMPORT')")
+    @Operation(summary = "Importer un fichier source : crée le Document Type et extrait sa structure")
+    public ResponseEntity<ApiResponse<DocumentTypeDTO>> importDocumentType(
+            @RequestParam("file") MultipartFile file,
+            @RequestParam("name") String name,
+            @RequestParam(value = "description", required = false) String description,
+            @RequestParam("categoryId") UUID categoryId,
+            @AuthenticationPrincipal UserDetailsImpl principal) {
+        return ResponseEntity.ok(ApiResponse.success(
+                documentTypeExtractionService.importAndExtract(file, name, description, categoryId, principal.getUtilisateur())));
+    }
+
+    @PostMapping("/{id}/extract")
+    @PreAuthorize("hasAuthority('DOCUMENT_TYPE_EXTRACT')")
+    @Operation(summary = "Relancer l'extraction de structure à partir du fichier source déjà stocké")
+    public ResponseEntity<ApiResponse<DocumentTypeDTO>> reextract(@PathVariable UUID id) {
+        return ResponseEntity.ok(ApiResponse.success(documentTypeExtractionService.reextract(id)));
+    }
+
+    @PostMapping("/{id}/validate")
+    @PreAuthorize("hasAuthority('DOCUMENT_TYPE_MANAGE')")
+    @Operation(summary = "Valider et activer un Document Type dont la structure a été extraite")
+    public ResponseEntity<ApiResponse<DocumentTypeDTO>> validate(@PathVariable UUID id) {
+        return ResponseEntity.ok(ApiResponse.success(documentTypeService.validate(id)));
     }
 }

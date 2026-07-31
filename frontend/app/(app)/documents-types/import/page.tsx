@@ -25,7 +25,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Progress } from '@/components/ui/progress';
 import { useCategories } from '@/lib/hooks/queries';
-import { importDocumentType, uploadAndExtractDocument } from '@/lib/api/client';
+import { importDocumentType } from '@/lib/api/client';
 import { useAuth } from '@/lib/auth-store';
 import type { Category } from '@/types';
 
@@ -76,7 +76,7 @@ export default function ImportDocumentTypePage() {
 
   const importMut = useMutation({
     mutationFn: async (v: FormValues) =>
-      (await importDocumentType({ fileName: file?.name ?? 'document.docx', categoryId: v.categoryId, name: v.name })).data,
+      (await importDocumentType({ file: file!, name: v.name, description: v.description, categoryId: v.categoryId })).data,
   });
 
   function handleFiles(files: FileList | null) {
@@ -96,37 +96,43 @@ export default function ImportDocumentTypePage() {
   }
 
   async function runExtraction(v: FormValues) {
+    if (!file) return;
     setExtracting(true);
     setProgress(0);
     setStepIndex(0);
 
-    // Extraction réelle (Tika + MinIO) via POST /api/v1/documents/upload —
-    // remplace l'ancienne simulation pure setTimeout. Le texte extrait n'est
-    // pas encore exploité plus loin car il n'existe pas de endpoint backend
-    // pour créer un Document Type à partir de ce contenu (écart 1.2/8.4,
-    // hors périmètre validé) : la structure est donc toujours créée côté
-    // mock ci-dessous (importMut), mais au moins l'extraction elle-même est
-    // réelle et valide le fichier côté serveur (taille, type MIME).
-    if (file) {
-      try {
-        setStepIndex(0);
-        await uploadAndExtractDocument(file);
-      } catch (e) {
-        setExtracting(false);
-        toast.error("Échec de l'extraction", { description: e instanceof Error ? e.message : undefined });
-        return;
+    // Import réel en un seul appel (POST /api/v1/document-types/import) :
+    // upload + extraction du texte (Tika) + construction de la structure
+    // (POI pour .docx, découpage en paragraphes pour pdf/txt/md/doc) +
+    // création du Document Type côté serveur. L'animation des étapes ne
+    // reflète plus des sous-appels séparés — elle tourne en parallèle de
+    // l'unique requête pour donner un retour visuel pendant son exécution.
+    const animateSteps = (async () => {
+      for (let i = 0; i < STEPS.length; i++) {
+        setStepIndex(i);
+        await new Promise((r) => setTimeout(r, 450 + Math.random() * 300));
+        setProgress(Math.round(((i + 1) / STEPS.length) * 100));
       }
+    })();
+
+    let created: Awaited<ReturnType<typeof importMut.mutateAsync>>;
+    try {
+      [created] = await Promise.all([importMut.mutateAsync(v), animateSteps]);
+    } catch (e) {
+      setExtracting(false);
+      toast.error("Échec de l'import", { description: e instanceof Error ? e.message : undefined });
+      return;
     }
 
-    for (let i = 0; i < STEPS.length; i++) {
-      setStepIndex(i);
-      await new Promise((r) => setTimeout(r, 650 + Math.random() * 400));
-      setProgress(Math.round(((i + 1) / STEPS.length) * 100));
-    }
-    const created = await importMut.mutateAsync(v);
     qc.invalidateQueries({ queryKey: ['document-types'] });
     setDone(true);
-    toast.success('Extraction terminée', { description: 'La structure a été extraite. Vérifiez-la avant activation.' });
+    if (created.status === 'ECHEC_EXTRACTION') {
+      toast.error('Extraction de structure échouée', {
+        description: 'Le fichier a été importé mais sa structure n\'a pas pu être extraite automatiquement. Corrigez-la manuellement ou relancez l\'extraction.',
+      });
+    } else {
+      toast.success('Extraction terminée', { description: 'La structure a été extraite. Vérifiez-la avant activation.' });
+    }
     setTimeout(() => router.push(`/documents-types/${created.id}/structure`), 900);
   }
 

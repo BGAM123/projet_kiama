@@ -14,6 +14,7 @@ import {
   GripVertical,
   Pencil,
   Plus,
+  RefreshCw,
   Save,
   Table2,
   Trash2,
@@ -28,7 +29,7 @@ import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { DocumentTypeStatusBadge } from '@/components/status-badge';
 import { useDocumentTypes, useStructure } from '@/lib/hooks/queries';
-import { updateStructure, updateDocumentType } from '@/lib/api/client';
+import { updateStructure, validateDocumentType, reextractDocumentType } from '@/lib/api/client';
 import type { StructureNode, DocumentType } from '@/types';
 
 const nodeIcon: Record<StructureNode['type'], React.ComponentType<{ className?: string }>> = {
@@ -63,14 +64,35 @@ export default function StructurePreviewPage() {
     mutationFn: async (t: StructureNode[]) => (await updateStructure(params.id, t)).data,
   });
 
+  // POST /document-types/{id}/validate (Bloc 4) : n'accepte la transition
+  // que depuis STRUCTURE_EXTRAITE ou EN_VALIDATION (rejet 409 sinon, cf.
+  // DocumentTypeService#validate côté backend) — le bouton reste désactivé
+  // tant que la structure n'a pas été extraite avec succès.
   const validate = useMutation({
-    mutationFn: async () => (await updateDocumentType(params.id, { status: 'ACTIF' })).data,
+    mutationFn: async () => (await validateDocumentType(params.id)).data,
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['document-types'] });
       toast.success('Document Type activé', { description: 'Il est désormais disponible pour la génération.' });
       router.push('/documents-types');
     },
+    onError: (e: Error) => toast.error("Impossible d'activer ce Document Type", { description: e.message }),
   });
+
+  // POST /document-types/{id}/extract : relance l'extraction à partir du
+  // fichier source déjà stocké — utile après un ECHEC_EXTRACTION (format
+  // limite mal supporté, etc.) sans avoir à réimporter le fichier.
+  const reextract = useMutation({
+    mutationFn: async () => (await reextractDocumentType(params.id)).data,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['document-types'] });
+      qc.invalidateQueries({ queryKey: ['structure', params.id] });
+      toast.success('Extraction relancée.');
+    },
+    onError: (e: Error) => toast.error("Échec de l'extraction", { description: e.message }),
+  });
+
+  const canValidate = docType?.status === 'STRUCTURE_EXTRAITE' || docType?.status === 'EN_VALIDATION';
+  const canReextract = docType?.status === 'ECHEC_EXTRACTION';
 
   function updateNode(id: string, patch: Partial<StructureNode>, nodes = tree): StructureNode[] {
     return nodes.map((n) => {
@@ -142,7 +164,18 @@ export default function StructurePreviewPage() {
             <Button onClick={save} disabled={saveStructure.isPending} variant="outline" size="sm">
               <Save className="mr-2 h-4 w-4" /> Enregistrer
             </Button>
-            <Button onClick={() => validate.mutate()} disabled={validate.isPending} className="bg-accent text-accent-foreground hover:bg-accent/90" size="sm">
+            {canReextract && (
+              <Button onClick={() => reextract.mutate()} disabled={reextract.isPending} variant="outline" size="sm">
+                <RefreshCw className="mr-2 h-4 w-4" /> Relancer l'extraction
+              </Button>
+            )}
+            <Button
+              onClick={() => validate.mutate()}
+              disabled={!canValidate || validate.isPending}
+              title={canValidate ? undefined : "Une structure extraite avec succès est requise avant l'activation."}
+              className="bg-accent text-accent-foreground hover:bg-accent/90"
+              size="sm"
+            >
               <CheckCircle2 className="mr-2 h-4 w-4" /> Valider & activer
             </Button>
           </div>

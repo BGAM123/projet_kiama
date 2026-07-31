@@ -46,12 +46,25 @@
         <maven.compiler.target>21</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 
+        <!--
+            Surcharge explicite de la version Lombok héritée de
+            spring-boot-starter-parent:3.3.4 (trop ancienne pour les JDK
+            récents — cf. "java.lang.ExceptionInInitializerError :
+            com.sun.tools.javac.code.TypeTag :: UNKNOWN" à la compilation).
+            Le projet cible la release 21, mais le compilateur javac réellement
+            invoqué par Maven dépend du JDK installé localement (JAVA_HOME) ;
+            s'il s'agit d'un JDK 24/25, seul Lombok >= 1.18.38 (1.18.42+
+            recommandé pour JDK 25) patche correctement les classes internes
+            javac dont Lombok dépend.
+        -->
+        <lombok.version>1.18.42</lombok.version>
+
         <springdoc.version>2.6.0</springdoc.version>
         <mapstruct.version>1.6.2</mapstruct.version>
         <resilience4j.version>2.2.0</resilience4j.version>
         <testcontainers.version>1.20.3</testcontainers.version>
         <jjwt.version>0.12.6</jjwt.version>
-        <tika.version>2.9.2</tika.version>
+        <tika.version>3.3.1</tika.version>
         <poi.version>5.3.0</poi.version>
         <pdfbox.version>3.0.3</pdfbox.version>
         <minio.version>8.5.12</minio.version>

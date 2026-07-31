@@ -4,6 +4,7 @@ import com.docuai.api.dto.DocumentStructureDTO;
 import com.docuai.api.dto.DocumentTypeDTO;
 import com.docuai.api.dto.UpdateDocumentTypeRequest;
 import com.docuai.api.dto.UpdateStructureRequest;
+import com.docuai.api.exception.BusinessException;
 import com.docuai.api.exception.NotFoundException;
 import com.docuai.api.mapper.DocumentStructureMapper;
 import com.docuai.api.mapper.DocumentTypeMapper;
@@ -23,9 +24,9 @@ import java.util.UUID;
 
 /**
  * Service applicatif : CRUD référentiel des Documents Types (section 5) +
- * consultation/correction de leur structure. L'import de fichier, le
- * déclenchement d'extraction et les transitions de statut associées
- * relèvent du Bloc 4 (pipeline d'extraction), pas de ce service.
+ * consultation/correction de leur structure + validation/activation
+ * (transition finale du pipeline). L'import de fichier et le déclenchement
+ * d'extraction eux-mêmes (Bloc 4) relèvent de DocumentTypeExtractionService.
  */
 @Service
 public class DocumentTypeService {
@@ -91,6 +92,26 @@ public class DocumentTypeService {
         DocumentType documentType = findEntity(id);
         documentType.setStatut(DocumentTypeStatut.ARCHIVE);
         documentTypeRepository.save(documentType);
+    }
+
+    /**
+     * Activation (STRUCTURE_EXTRAITE|EN_VALIDATION -> ACTIF) : le Document
+     * Type devient disponible pour la génération. Un Document Type dont la
+     * structure n'a pas encore été extraite (ou dont l'extraction a échoué)
+     * ne peut pas être activé directement — il faut d'abord (ré)extraire sa
+     * structure, cf. POST /document-types/{id}/extract.
+     */
+    @Transactional
+    public DocumentTypeDTO validate(UUID id) {
+        DocumentType documentType = findEntity(id);
+        DocumentTypeStatut statut = documentType.getStatut();
+        if (statut != DocumentTypeStatut.STRUCTURE_EXTRAITE && statut != DocumentTypeStatut.EN_VALIDATION) {
+            throw BusinessException.conflict("DOCUMENT_TYPE_NOT_READY",
+                    "Ce Document Type ne peut pas être activé dans son état actuel (" + statut + "). "
+                            + "Une structure extraite avec succès est requise au préalable.");
+        }
+        documentType.setStatut(DocumentTypeStatut.ACTIF);
+        return documentTypeMapper.toDto(documentTypeRepository.save(documentType));
     }
 
     @Transactional(readOnly = true)

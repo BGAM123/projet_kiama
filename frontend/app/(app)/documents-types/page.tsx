@@ -5,15 +5,22 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
 import {
+  AlertCircle,
   ArrowDownUp,
   ChevronRight,
   Eye,
   FileText,
   Layers,
+  Loader2,
   Pencil,
   Plus,
+  RefreshCw,
   Search,
+  Settings2,
   Trash2,
   Upload,
 } from 'lucide-react';
@@ -21,11 +28,13 @@ import { PageHeader } from '@/components/page-header';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { DocumentTypeStatusBadge } from '@/components/status-badge';
 import { useDocumentTypes, useCategories, useStructure } from '@/lib/hooks/queries';
-import { deleteDocumentType } from '@/lib/api/client';
+import { deleteDocumentType, reextractDocumentType, updateDocumentType } from '@/lib/api/client';
 import { useAuth } from '@/lib/auth-store';
 import { formatDate } from '@/lib/format';
 import type { DocumentType, Category, StructureNode } from '@/types';
@@ -33,6 +42,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
@@ -53,6 +63,7 @@ export default function DocumentTypesPage() {
   const [sortKey, setSortKey] = useState<SortKey>('createdAt');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [preview, setPreview] = useState<DocumentType | null>(null);
+  const [editing, setEditing] = useState<DocumentType | null>(null);
 
   const remove = useMutation({
     mutationFn: async (id: string) => (await deleteDocumentType(id)).data,
@@ -60,6 +71,18 @@ export default function DocumentTypesPage() {
       qc.invalidateQueries({ queryKey: ['document-types'] });
       toast.success('Document Type archivé.');
     },
+  });
+
+  // Relance rapide depuis la liste après un ECHEC_EXTRACTION, sans passer
+  // par l'écran de structure (POST /document-types/{id}/extract, Bloc 4).
+  const reextract = useMutation({
+    mutationFn: async (id: string) => (await reextractDocumentType(id)).data,
+    onSuccess: (dt) => {
+      qc.invalidateQueries({ queryKey: ['document-types'] });
+      qc.invalidateQueries({ queryKey: ['structure', dt.id] });
+      toast.success(dt.status === 'ECHEC_EXTRACTION' ? "L'extraction a échoué à nouveau." : 'Extraction relancée avec succès.');
+    },
+    onError: (e: Error) => toast.error("Échec de l'extraction", { description: e.message }),
   });
 
   const filtered = useMemo(() => {
@@ -195,6 +218,21 @@ export default function DocumentTypesPage() {
                           </Button>
                           {isAdmin && (
                             <>
+                              {d.status === 'ECHEC_EXTRACTION' && (
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8 text-warning hover:bg-warning/10"
+                                  aria-label="Relancer l'extraction"
+                                  disabled={reextract.isPending}
+                                  onClick={() => reextract.mutate(d.id)}
+                                >
+                                  <RefreshCw className="h-4 w-4" />
+                                </Button>
+                              )}
+                              <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Modifier les informations" onClick={() => setEditing(d)}>
+                                <Settings2 className="h-4 w-4" />
+                              </Button>
                               <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Éditer la structure" onClick={() => router.push(`/documents-types/${d.id}/structure`)}>
                                 <Pencil className="h-4 w-4" />
                               </Button>
@@ -226,7 +264,99 @@ export default function DocumentTypesPage() {
       </Card>
 
       <StructurePreviewDialog documentType={preview} onClose={() => setPreview(null)} />
+      <EditDocumentTypeDialog documentType={editing} categories={categories} onClose={() => setEditing(null)} />
     </div>
+  );
+}
+
+const editSchema = z.object({
+  name: z.string().min(1, 'Nom requis.'),
+  description: z.string().optional(),
+  categoryId: z.string().min(1, 'Sélectionnez une catégorie.'),
+});
+
+type EditValues = z.infer<typeof editSchema>;
+
+function EditDocumentTypeDialog({
+  documentType,
+  categories,
+  onClose,
+}: {
+  documentType: DocumentType | null;
+  categories: Category[] | undefined;
+  onClose: () => void;
+}) {
+  const qc = useQueryClient();
+  const form = useForm<EditValues>({ resolver: zodResolver(editSchema) });
+  const [serverError, setServerError] = useState<string | null>(null);
+
+  // Re-seed le formulaire à chaque ouverture (nouveau Document Type ciblé).
+  const currentId = documentType?.id ?? null;
+  const [seededFor, setSeededFor] = useState<string | null>(null);
+  if (documentType && currentId !== seededFor) {
+    form.reset({ name: documentType.name, description: documentType.description, categoryId: documentType.categoryId });
+    setSeededFor(currentId);
+  }
+
+  const editMutation = useMutation({
+    mutationFn: async (v: EditValues) =>
+      (await updateDocumentType(documentType!.id, { name: v.name, description: v.description ?? '', categoryId: v.categoryId })).data,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['document-types'] });
+      toast.success('Document Type modifié');
+      onClose();
+    },
+    onError: (e: Error) => setServerError(e.message),
+  });
+
+  const onSubmit = form.handleSubmit((v) => {
+    setServerError(null);
+    editMutation.mutate(v);
+  });
+
+  return (
+    <Dialog open={!!documentType} onOpenChange={(o) => { if (!o) { onClose(); setSeededFor(null); setServerError(null); } }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Settings2 className="h-5 w-5 text-primary" /> Modifier les informations
+          </DialogTitle>
+          <DialogDescription>Nom, description et catégorie — le statut évolue via le pipeline d'extraction.</DialogDescription>
+        </DialogHeader>
+        <form onSubmit={onSubmit} className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="edt-name">Nom</Label>
+            <Input id="edt-name" {...form.register('name')} aria-invalid={!!form.formState.errors.name} />
+            {form.formState.errors.name && <p className="text-xs text-destructive">{form.formState.errors.name.message}</p>}
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="edt-description">Description</Label>
+            <Textarea id="edt-description" rows={3} {...form.register('description')} />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="edt-categoryId">Catégorie</Label>
+            <Select value={form.watch('categoryId')} onValueChange={(v) => form.setValue('categoryId', v, { shouldValidate: true })}>
+              <SelectTrigger id="edt-categoryId" aria-label="Catégorie"><SelectValue placeholder="Sélectionnez une catégorie" /></SelectTrigger>
+              <SelectContent>
+                {categories?.map((c: Category) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            {form.formState.errors.categoryId && <p className="text-xs text-destructive">{form.formState.errors.categoryId.message}</p>}
+          </div>
+          {serverError && (
+            <div role="alert" className="flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              <AlertCircle className="h-4 w-4 flex-none" /> {serverError}
+            </div>
+          )}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={onClose}>Annuler</Button>
+            <Button type="submit" disabled={editMutation.isPending} className="bg-accent text-accent-foreground hover:bg-accent/90">
+              {editMutation.isPending ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Enregistrement…</> : 'Enregistrer'}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 

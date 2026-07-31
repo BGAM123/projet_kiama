@@ -40,12 +40,35 @@ Voir `ARCHITECTURE.md` pour le détail de l'arborescence proposée.
       `/document-types` : lecture (`DOCUMENT_TYPE_READ`, filtres optionnels
       `categoryId`/`status`), modification nom/description/catégorie et
       archivage logique (`DOCUMENT_TYPE_MANAGE`) ; `GET`/`PUT
-      .../{id}/structure` pour consulter/corriger l'arbre extrait. L'import de
-      fichier et le déclenchement d'extraction restent au Bloc 4 (aucun
-      `DocumentType` ne peut donc encore être créé via l'API à ce stade — seul
-      celui seedé en V2 existe).
-      **En attente de validation avant de poursuivre le Bloc 4.**
-- [ ] Bloc 4 — Extraction documentaire (upload, Tika/POI/PDFBox, arbre de structure)
+      .../{id}/structure` pour consulter/corriger l'arbre extrait.
+- [x] **Bloc 4 — Extraction documentaire** : `POST /document-types/import`
+      (multipart, `DOCUMENT_TYPE_IMPORT`) fait tout en un appel — upload,
+      extraction de texte brut (Tika, `TextExtractionService`), construction
+      de l'arbre de structure (`StructureExtractionService`) et stockage du
+      fichier source dans MinIO (bucket `docuai.minio.bucket-sources`, clé
+      persistée dans `document_type.fichier_source_cle`) — puis crée le
+      `DocumentType` (statut `STRUCTURE_EXTRAITE`, ou `ECHEC_EXTRACTION` si la
+      structure n'a pas pu être construite ; le fichier reste importé dans ce
+      cas). `POST /document-types/{id}/extract` (`DOCUMENT_TYPE_EXTRACT`)
+      retélécharge le fichier déjà stocké et relance l'extraction sans
+      réimporter. `POST /document-types/{id}/validate`
+      (`DOCUMENT_TYPE_MANAGE`, sur `DocumentTypeService`) active le Document
+      Type (`STRUCTURE_EXTRAITE`/`EN_VALIDATION` -> `ACTIF`, 409 sinon).
+      Seul le **.docx** bénéficie d'une vraie détection structurelle (Apache
+      POI : titres via le style de paragraphe "Heading N"/"Titre N",
+      tableaux, ordre réel du document). Le **PDF** (PDFBox n'expose aucune
+      sémantique de titre native), le **texte brut/Markdown** (titres `#`
+      réels pour Markdown uniquement) et le repli **.doc legacy** (non
+      couvert par `poi-ooxml`, qui ne lit que l'OOXML — repli sur le texte
+      Tika) sont découpés en paragraphes plats, sans hiérarchie. L'arbre
+      produit est plat (headings/paragraphes/tableaux en frères, comme
+      l'exemple seedé en V2) ; l'éditeur manuel côté frontend permet
+      d'imbriquer des sous-sections après coup. ClamAV (`docuai.clamav.*`)
+      reste désactivé par défaut — non branché. Pas de retry/circuit-breaker
+      malgré `resilience4j.retry.instances.extraction` déjà configuré (le
+      brancher proprement demande d'extraire l'appel dans un collaborateur
+      dédié pour passer par le proxy Spring AOP).
+      **En attente de validation avant de poursuivre le Bloc 5.**
 - [ ] Bloc 5 — IA (adaptateurs OpenAI/Claude/Ollama, Prompt Builder, RAG, Structural Validator)
 - [ ] Bloc 6 — Génération (`/conversations`, `/generations`, streaming SSE)
 - [ ] Bloc 7 — Export (DOCX/PDF/Markdown)
@@ -173,6 +196,36 @@ curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8080/api/v1/document-t
 curl -s -o /dev/null -w "%{http_code}\n" -X PATCH http://localhost:8080/api/v1/document-types/$DT_ID \
   -H "Authorization: Bearer $USER_ACCESS" -H "Content-Type: application/json" -d '{"name":"x"}'
 # -> 403
+```
+
+### Tester le Bloc 4 (extraction)
+
+```bash
+# Import d'un fichier .docx — multipart, categoryId réel (ex. celui listé par
+# GET /categories), crée le Document Type + extrait sa structure en un appel
+CATEGORY_ID=$(curl -s http://localhost:8080/api/v1/categories -H "Authorization: Bearer $ACCESS" | jq -r '.data[0].id')
+curl -s -X POST http://localhost:8080/api/v1/document-types/import \
+  -H "Authorization: Bearer $ACCESS" \
+  -F "file=@/chemin/vers/exemple.docx" \
+  -F "name=Exemple importé" \
+  -F "description=Import de test" \
+  -F "categoryId=$CATEGORY_ID" | tee /tmp/import.json
+
+NEW_DT_ID=$(jq -r '.data.id' /tmp/import.json)
+jq '.data.status' /tmp/import.json   # -> "STRUCTURE_EXTRAITE" (ou "ECHEC_EXTRACTION")
+
+# Structure extraite (titres/paragraphes/tableaux détectés depuis le .docx)
+curl -s http://localhost:8080/api/v1/document-types/$NEW_DT_ID/structure -H "Authorization: Bearer $ACCESS"
+
+# Activation — refusée tant que le statut n'est pas STRUCTURE_EXTRAITE/EN_VALIDATION
+curl -s -X POST http://localhost:8080/api/v1/document-types/$NEW_DT_ID/validate -H "Authorization: Bearer $ACCESS"
+
+# Relancer l'extraction à partir du fichier déjà stocké (sans réimporter)
+curl -s -X POST http://localhost:8080/api/v1/document-types/$NEW_DT_ID/extract -H "Authorization: Bearer $ACCESS"
+
+# Endpoint générique d'extraction seule (sans créer de Document Type)
+curl -s -X POST http://localhost:8080/api/v1/documents/upload \
+  -H "Authorization: Bearer $ACCESS" -F "file=@/chemin/vers/exemple.pdf"
 ```
 
 ### Console MinIO

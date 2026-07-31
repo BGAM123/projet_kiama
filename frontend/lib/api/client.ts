@@ -2,11 +2,12 @@
 //
 // Périmètre réel (via lib/api/http.ts) à ce stade de l'intégration : auth
 // (login/refresh/logout/password), users (CRUD complet + reset mot de passe
-// admin), roles (lecture), upload/extraction, export, notifications, audit
-// logs. Les fonctions encore mockées ci-dessous n'ont pas d'endpoint backend
-// correspondant (catégories, document-types CRUD, conversations, générations,
-// streaming, ai-configs, dashboard) et continuent de résoudre contre les
-// fixtures en mémoire.
+// admin), roles (lecture), catégories (CRUD complet, Bloc 3), document-types
+// (CRUD référentiel + structure, Bloc 3 ; import/ré-extraction/validation,
+// Bloc 4), upload/extraction bas niveau, export, notifications, audit logs.
+// Les fonctions encore mockées ci-dessous n'ont pas d'endpoint backend
+// correspondant (conversations, générations, streaming, ai-configs,
+// dashboard) et continuent de résoudre contre les fixtures en mémoire.
 //
 // Chaque fonction migrée garde exactement la même signature qu'avant, pour
 // que les hooks React Query et les composants qui les consomment n'aient pas
@@ -39,6 +40,7 @@ import type {
   Notification,
   ReferenceDocument,
   Role,
+  StructureNode,
   User,
 } from '@/types';
 import type { ApiSuccess } from '@/types';
@@ -293,104 +295,244 @@ export async function adminResetPassword(userId: string, next: string): Promise<
 }
 
 // ---------------------------------------------------------------------------
-// Categories
+// Categories — branché sur les vrais endpoints /categories du Bloc 3 (CRUD
+// complet, lecture ouverte à tout authentifié, mutations réservées
+// CATEGORY_MANAGE, cf. CategoryController). CategoryDTO backend correspond
+// exactement à Category côté frontend, à ceci près que `description` est
+// omise (JsonInclude NON_NULL) plutôt que renvoyée à null — on la
+// reconstruit en chaîne vide pour respecter le type non-optionnel.
 // ---------------------------------------------------------------------------
 
+interface BackendCategoryDTO {
+  id: string;
+  name: string;
+  description?: string | null;
+}
+
+function adaptCategoryDTO(dto: BackendCategoryDTO): Category {
+  return { id: dto.id, name: dto.name, description: dto.description ?? '' };
+}
+
 export async function listCategories(): Promise<ApiSuccess<Category[]>> {
-  return guard(() => [...categories]);
+  try {
+    const res = await http.get<{ data: BackendCategoryDTO[] }>('/categories');
+    return ok(res.data.data.map(adaptCategoryDTO));
+  } catch (e) {
+    throw toApiError(e, '/api/v1/categories');
+  }
 }
 
 export async function createCategory(input: Omit<Category, 'id'>): Promise<ApiSuccess<Category>> {
-  return guard(() => {
-    const c: Category = { id: uid('c'), ...input };
-    categories.push(c);
-    return c;
-  });
+  try {
+    const res = await http.post<{ data: BackendCategoryDTO }>('/categories', {
+      name: input.name,
+      description: input.description,
+    });
+    return ok(adaptCategoryDTO(res.data.data));
+  } catch (e) {
+    throw toApiError(e, '/api/v1/categories');
+  }
 }
 
 export async function updateCategory(id: string, patch: Partial<Category>): Promise<ApiSuccess<Category>> {
-  return guard(() => {
-    const idx = categories.findIndex((c) => c.id === id);
-    if (idx < 0) throw new ApiError('CATEGORY_NOT_FOUND', 'Catégorie introuvable.', `/api/v1/categories/${id}`);
-    categories[idx] = { ...categories[idx], ...patch, id };
-    return categories[idx];
-  });
+  try {
+    const res = await http.patch<{ data: BackendCategoryDTO }>(`/categories/${id}`, {
+      name: patch.name,
+      description: patch.description,
+    });
+    return ok(adaptCategoryDTO(res.data.data));
+  } catch (e) {
+    throw toApiError(e, `/api/v1/categories/${id}`);
+  }
 }
 
 export async function deleteCategory(id: string): Promise<ApiSuccess<{ id: string }>> {
-  return guard(() => {
-    const idx = categories.findIndex((c) => c.id === id);
-    if (idx < 0) throw new ApiError('CATEGORY_NOT_FOUND', 'Catégorie introuvable.', `/api/v1/categories/${id}`);
-    categories.splice(idx, 1);
-    return { id };
-  });
+  try {
+    // Le backend refuse la suppression (409) si un Document Type est encore
+    // rattaché à la catégorie — l'erreur remonte telle quelle via toApiError
+    // pour être affichée par l'appelant (cf. admin/categories/page.tsx).
+    await http.delete(`/categories/${id}`);
+    return ok({ id });
+  } catch (e) {
+    throw toApiError(e, `/api/v1/categories/${id}`);
+  }
 }
 
 // ---------------------------------------------------------------------------
-// Document types & structures
+// Document types & structures — branché sur les vrais endpoints
+// /document-types du Bloc 3 (cf. DocumentTypeController). Le CRUD référentiel
+// (nom/description/catégorie), l'archivage et la lecture/correction de la
+// structure sont réels. L'import de fichier (création d'un nouveau Document
+// Type) et les transitions de statut pilotées par le pipeline d'extraction
+// (IMPORTE → EN_EXTRACTION → … → ACTIF) sont explicitement hors périmètre de
+// ce contrôleur (Bloc 4, pas encore livré côté backend) : `importDocumentType`
+// reste donc mocké ci-dessous, faute d'endpoint équivalent.
 // ---------------------------------------------------------------------------
 
+interface BackendStructureNodeDTO {
+  id: string;
+  type: string;
+  level?: number | null;
+  label: string;
+  children?: BackendStructureNodeDTO[] | null;
+  columns?: string[] | null;
+}
+
+function adaptStructureNodeDTO(dto: BackendStructureNodeDTO): StructureNode {
+  return {
+    id: dto.id,
+    type: dto.type as StructureNode['type'],
+    level: dto.level ?? undefined,
+    label: dto.label,
+    children: dto.children?.map(adaptStructureNodeDTO),
+    columns: dto.columns ?? undefined,
+  };
+}
+
+interface BackendDocumentTypeDTO {
+  id: string;
+  name: string;
+  description?: string | null;
+  categoryId: string;
+  status: string;
+  version: number;
+  createdAt: string;
+}
+
+function adaptDocumentTypeDTO(dto: BackendDocumentTypeDTO): DocumentType {
+  return {
+    id: dto.id,
+    name: dto.name,
+    description: dto.description ?? '',
+    categoryId: dto.categoryId,
+    status: dto.status as DocumentType['status'],
+    version: dto.version,
+    createdAt: dto.createdAt,
+  };
+}
+
+interface BackendDocumentStructureDTO {
+  id: string;
+  documentTypeId: string;
+  tree: BackendStructureNodeDTO[];
+  hasToc?: boolean | null;
+}
+
+function adaptDocumentStructureDTO(dto: BackendDocumentStructureDTO): DocumentStructure {
+  return {
+    id: dto.id,
+    documentTypeId: dto.documentTypeId,
+    tree: (dto.tree ?? []).map(adaptStructureNodeDTO),
+    hasToc: dto.hasToc ?? false,
+  };
+}
+
 export async function listDocumentTypes(): Promise<ApiSuccess<DocumentType[]>> {
-  return guard(() => [...documentTypes]);
+  try {
+    const res = await http.get<{ data: BackendDocumentTypeDTO[] }>('/document-types');
+    return ok(res.data.data.map(adaptDocumentTypeDTO));
+  } catch (e) {
+    throw toApiError(e, '/api/v1/document-types');
+  }
 }
 
 export async function getDocumentType(id: string): Promise<ApiSuccess<DocumentType>> {
-  return guard(() => {
-    const dt = documentTypes.find((d) => d.id === id);
-    if (!dt) throw new ApiError('DOCUMENT_TYPE_NOT_FOUND', 'Le Document Type demandé est introuvable.', `/api/v1/document-types/${id}`);
-    return dt;
-  });
+  try {
+    const res = await http.get<{ data: BackendDocumentTypeDTO }>(`/document-types/${id}`);
+    return ok(adaptDocumentTypeDTO(res.data.data));
+  } catch (e) {
+    throw toApiError(e, `/api/v1/document-types/${id}`);
+  }
 }
 
+// Ne couvre que le CRUD référentiel réellement supporté par le backend
+// (nom/description/catégorie) — un éventuel `patch.status` (ex. ancien flux
+// mock "Valider & activer") est ignoré côté serveur : UpdateDocumentTypeRequest
+// n'a pas de champ statut, celui-ci n'évoluant que via le pipeline
+// d'extraction (Bloc 4). Voir documents-types/[id]/structure/page.tsx, où le
+// bouton d'activation est désactivé tant que ce pipeline n'existe pas.
 export async function updateDocumentType(id: string, patch: Partial<DocumentType>): Promise<ApiSuccess<DocumentType>> {
-  return guard(() => {
-    const idx = documentTypes.findIndex((d) => d.id === id);
-    if (idx < 0) throw new ApiError('DOCUMENT_TYPE_NOT_FOUND', 'Document Type introuvable.', `/api/v1/document-types/${id}`);
-    documentTypes[idx] = { ...documentTypes[idx], ...patch, id };
-    return documentTypes[idx];
-  });
+  try {
+    const res = await http.patch<{ data: BackendDocumentTypeDTO }>(`/document-types/${id}`, {
+      name: patch.name,
+      description: patch.description,
+      categoryId: patch.categoryId,
+    });
+    return ok(adaptDocumentTypeDTO(res.data.data));
+  } catch (e) {
+    throw toApiError(e, `/api/v1/document-types/${id}`);
+  }
 }
 
 export async function deleteDocumentType(id: string): Promise<ApiSuccess<{ id: string }>> {
-  return guard(() => {
-    const idx = documentTypes.findIndex((d) => d.id === id);
-    if (idx < 0) throw new ApiError('DOCUMENT_TYPE_NOT_FOUND', 'Document Type introuvable.', `/api/v1/document-types/${id}`);
-    documentTypes[idx].status = 'ARCHIVE';
-    return { id };
-  });
+  try {
+    // DELETE /document-types/{id} = archivage logique (statut -> ARCHIVE)
+    // côté backend, pas une suppression physique — même sémantique que
+    // l'ancien mock (cf. bouton "Archiver" de documents-types/page.tsx).
+    await http.delete(`/document-types/${id}`);
+    return ok({ id });
+  } catch (e) {
+    throw toApiError(e, `/api/v1/document-types/${id}`);
+  }
 }
 
-export async function importDocumentType(input: { fileName: string; categoryId: string; name: string }): Promise<ApiSuccess<DocumentType>> {
-  return guard(() => {
-    const dt: DocumentType = {
-      id: uid('dt'),
-      name: input.name,
-      description: `Document Type importé depuis ${input.fileName}.`,
-      categoryId: input.categoryId,
-      status: 'EN_EXTRACTION',
-      version: 1,
-      createdAt: new Date().toISOString(),
-    };
-    documentTypes.push(dt);
-    return dt;
-  });
+// Bloc 4 — POST /document-types/import fait tout en un appel côté backend :
+// upload + extraction du texte (Tika) + construction de l'arbre de structure
+// (POI pour .docx, découpage en paragraphes pour pdf/txt/md/doc) + création
+// du DocumentType (statut STRUCTURE_EXTRAITE, ou ECHEC_EXTRACTION si
+// l'extraction de structure échoue — le fichier reste importé et stocké
+// dans ce cas, cf. POST .../extract pour relancer).
+export async function importDocumentType(input: { file: File; name: string; description?: string; categoryId: string }): Promise<ApiSuccess<DocumentType>> {
+  try {
+    const form = new FormData();
+    form.append('file', input.file);
+    form.append('name', input.name);
+    if (input.description) form.append('description', input.description);
+    form.append('categoryId', input.categoryId);
+    // Ne PAS fixer le header Content-Type manuellement, cf. uploadAndExtractDocument.
+    const res = await http.post<{ data: BackendDocumentTypeDTO }>('/document-types/import', form);
+    return ok(adaptDocumentTypeDTO(res.data.data));
+  } catch (e) {
+    throw toApiError(e, '/api/v1/document-types/import');
+  }
+}
+
+/** Relance l'extraction de structure à partir du fichier source déjà stocké (ex. après un ECHEC_EXTRACTION). */
+export async function reextractDocumentType(id: string): Promise<ApiSuccess<DocumentType>> {
+  try {
+    const res = await http.post<{ data: BackendDocumentTypeDTO }>(`/document-types/${id}/extract`);
+    return ok(adaptDocumentTypeDTO(res.data.data));
+  } catch (e) {
+    throw toApiError(e, `/api/v1/document-types/${id}/extract`);
+  }
+}
+
+/** Valide et active un Document Type dont la structure a été extraite (STRUCTURE_EXTRAITE|EN_VALIDATION -> ACTIF). */
+export async function validateDocumentType(id: string): Promise<ApiSuccess<DocumentType>> {
+  try {
+    const res = await http.post<{ data: BackendDocumentTypeDTO }>(`/document-types/${id}/validate`);
+    return ok(adaptDocumentTypeDTO(res.data.data));
+  } catch (e) {
+    throw toApiError(e, `/api/v1/document-types/${id}/validate`);
+  }
 }
 
 export async function getStructure(documentTypeId: string): Promise<ApiSuccess<DocumentStructure>> {
-  return guard(() => {
-    const s = structures.find((s) => s.documentTypeId === documentTypeId);
-    if (!s) throw new ApiError('STRUCTURE_NOT_FOUND', 'Aucune structure trouvée pour ce Document Type.', `/api/v1/document-types/${documentTypeId}/structure`);
-    return s;
-  });
+  try {
+    const res = await http.get<{ data: BackendDocumentStructureDTO }>(`/document-types/${documentTypeId}/structure`);
+    return ok(adaptDocumentStructureDTO(res.data.data));
+  } catch (e) {
+    throw toApiError(e, `/api/v1/document-types/${documentTypeId}/structure`);
+  }
 }
 
 export async function updateStructure(documentTypeId: string, tree: DocumentStructure['tree']): Promise<ApiSuccess<DocumentStructure>> {
-  return guard(() => {
-    const idx = structures.findIndex((s) => s.documentTypeId === documentTypeId);
-    if (idx < 0) throw new ApiError('STRUCTURE_NOT_FOUND', 'Structure introuvable.', `/api/v1/document-types/${documentTypeId}/structure`);
-    structures[idx] = { ...structures[idx], tree };
-    return structures[idx];
-  });
+  try {
+    const res = await http.put<{ data: BackendDocumentStructureDTO }>(`/document-types/${documentTypeId}/structure`, { tree });
+    return ok(adaptDocumentStructureDTO(res.data.data));
+  } catch (e) {
+    throw toApiError(e, `/api/v1/document-types/${documentTypeId}/structure`);
+  }
 }
 
 // ---------------------------------------------------------------------------

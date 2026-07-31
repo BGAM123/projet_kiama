@@ -118,7 +118,10 @@ docuai:
     max-size-mb: 25
     allowed-mime-types:
       - application/vnd.openxmlformats-officedocument.wordprocessingml.document
+      - application/msword
       - application/pdf
+      - text/plain
+      - text/markdown
   clamav:
     enabled: ${DOCUAI_CLAMAV_ENABLED:false}
     host: ${DOCUAI_CLAMAV_HOST:localhost}

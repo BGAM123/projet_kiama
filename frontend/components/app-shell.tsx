@@ -6,6 +6,7 @@ import { useMemo, useState } from 'react';
 import {
   Bot,
   FileText,
+  FolderTree,
   History,
   KeyRound,
   LayoutDashboard,
@@ -46,6 +47,7 @@ const navItems: NavItem[] = [
   { href: '/documents-types', label: 'Documents Types', icon: FileText },
   { href: '/chat', label: 'Générer document', icon: Bot },
   { href: '/history', label: 'Historique', icon: History },
+  { href: '/admin/categories', label: 'Catégories', icon: FolderTree, requireAdmin: true },
   { href: '/admin/users', label: 'Utilisateurs', icon: Users, requireAdmin: true },
   { href: '/admin/ai-models', label: 'Modèles IA', icon: Sparkles, requireAdmin: true },
   { href: '/admin/audit', label: 'Journal d\'activité', icon: ScrollText, requireAdmin: true },

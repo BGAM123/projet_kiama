@@ -1,9 +1,10 @@
 // Client HTTP réel vers le backend Spring Boot. Remplace, domaine par domaine,
 // les fonctions mock de lib/api/client.ts (voir commentaire en tête de ce
-// fichier). Périmètre connecté à ce stade (cf. rapport d'écarts, étape 3/4) :
-// auth, users (lecture), upload/extraction, export, notifications, audit logs.
-// Le reste (catégories, document-types CRUD, conversations, générations,
-// streaming, ai-configs, dashboard) reste mocké faute d'endpoints backend.
+// fichier). Périmètre connecté à ce stade : auth, users, roles, catégories
+// (Bloc 3), document-types + structure (Bloc 3), upload/extraction, export,
+// notifications, audit logs. Le reste (import de Document Type/pipeline
+// d'extraction — Bloc 4 —, conversations, générations, streaming, ai-configs,
+// dashboard) reste mocké faute d'endpoints backend.
 
 import axios, { AxiosError, type InternalAxiosRequestConfig } from 'axios';
 import type { ApiErrorBody } from '@/types';
