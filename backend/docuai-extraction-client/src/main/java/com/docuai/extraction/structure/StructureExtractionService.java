@@ -6,6 +6,8 @@ import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
 import org.apache.poi.xwpf.usermodel.IBodyElement;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
+import org.apache.poi.xwpf.usermodel.XWPFFooter;
+import org.apache.poi.xwpf.usermodel.XWPFHeader;
 import org.apache.poi.xwpf.usermodel.XWPFParagraph;
 import org.apache.poi.xwpf.usermodel.XWPFStyle;
 import org.apache.poi.xwpf.usermodel.XWPFTable;
@@ -67,6 +69,36 @@ public class StructureExtractionService {
             throw new StructureExtractionException("Échec de l'extraction de la structure du document.", e);
         }
     }
+
+    /**
+     * En-tête/pied de page du document source — DOCX uniquement (PDF/texte
+     * brut n'ont pas de notion structurelle d'en-tête/pied répété par page).
+     * Contenu statique, jamais régénéré par l'IA (section 4.4/Bloc 6) :
+     * simplement rejoué tel quel à l'export (Bloc 7), voir
+     * {@code DocumentStructure.headerText}/{@code footerText}.
+     */
+    public HeaderFooterText extractHeaderFooter(byte[] content, String extension) {
+        if (!"docx".equalsIgnoreCase(extension)) {
+            return new HeaderFooterText(null, null);
+        }
+        try (XWPFDocument document = new XWPFDocument(new ByteArrayInputStream(content))) {
+            String header = document.getHeaderList().stream()
+                    .map(XWPFHeader::getText)
+                    .filter(t -> t != null && !t.isBlank())
+                    .map(String::strip)
+                    .collect(java.util.stream.Collectors.joining("\n"));
+            String footer = document.getFooterList().stream()
+                    .map(XWPFFooter::getText)
+                    .filter(t -> t != null && !t.isBlank())
+                    .map(String::strip)
+                    .collect(java.util.stream.Collectors.joining("\n"));
+            return new HeaderFooterText(header.isBlank() ? null : header, footer.isBlank() ? null : footer);
+        } catch (IOException e) {
+            throw new StructureExtractionException("Échec de l'extraction de l'en-tête/pied de page du document.", e);
+        }
+    }
+
+    public record HeaderFooterText(String headerText, String footerText) {}
 
     private List<StructureNode> extractDocx(byte[] content) throws IOException {
         List<StructureNode> nodes = new ArrayList<>();

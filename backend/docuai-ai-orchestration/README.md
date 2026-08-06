@@ -15,11 +15,11 @@ Ce module ne définit **aucun endpoint REST** — il est consommé par
 ```
 com.docuai.ai
 ├── port/            AiProviderPort (generate / streamGenerate / provider)
-├── enums/           AiProvider (OPENAI, CLAUDE, GEMINI, MISTRAL, OLLAMA, DEEPSEEK)
+├── enums/           AiProvider (OPENAI, CLAUDE, GEMINI, MISTRAL, OLLAMA, DEEPSEEK, GROQ, QWEN)
 ├── dto/              GenerationRequest, GenerationResult, ChatMessage, Chunk (delta de streaming)
-├── provider/        OpenAiAdapter, ClaudeAdapter, OllamaAdapter (réels, @Component)
-│                    GeminiAdapter, MistralAdapter, DeepSeekAdapter (structurés, pas de @Component)
-│                    AbstractOpenAiStyleAdapter (base commune OpenAI/Mistral/DeepSeek)
+├── provider/        OpenAiAdapter, ClaudeAdapter, OllamaAdapter, GeminiAdapter, MistralAdapter,
+│                    DeepSeekAdapter, GroqAdapter, QwenAdapter (tous réels, @Component)
+│                    AbstractOpenAiStyleAdapter (base commune OpenAI/Mistral/DeepSeek/Groq/Qwen)
 ├── service/         AiProviderFactory, GenerationOrchestrator, PromptBuilder,
 │                    StructuralValidator, ContentAssembler
 ├── rag/             ChunkingService, EmbeddingService, SimilaritySearchService
@@ -27,21 +27,28 @@ com.docuai.ai
 └── exception/       AiProviderException (-> 503 AI_PROVIDER_UNAVAILABLE, GlobalExceptionHandler)
 ```
 
-## Fournisseurs réels vs structurés
+## Fournisseurs
 
-| Fournisseur | Statut | API | Streaming |
-|---|---|---|---|
-| OpenAI | Réel (`@Component`) | Chat Completions (`/chat/completions`) | SSE |
-| Claude (Anthropic) | Réel (`@Component`) | Messages API (`/messages`) | SSE (`content_block_delta`) |
-| Ollama | Réel (`@Component`), pas de clé API | `/api/chat` (local) | NDJSON |
-| Gemini | Structuré, **pas de `@Component`** | Generative Language API | SSE (`alt=sse`) |
-| Mistral | Structuré, **pas de `@Component`** | Chat Completions (compatible OpenAI) | SSE |
-| DeepSeek | Structuré, **pas de `@Component`** | Chat Completions (compatible OpenAI) | SSE |
+| Fournisseur | API | Streaming |
+|---|---|---|
+| OpenAI | Chat Completions (`/chat/completions`) | SSE |
+| Claude (Anthropic) | Messages API (`/messages`) | SSE (`content_block_delta`) |
+| Ollama (local, pas de clé API) | `/api/chat` | NDJSON |
+| Gemini | Generative Language API | SSE (`alt=sse`) |
+| Mistral | Chat Completions (compatible OpenAI) | SSE |
+| DeepSeek | Chat Completions (compatible OpenAI) | SSE |
+| Groq | Chat Completions (compatible OpenAI) | SSE |
+| Qwen (Alibaba Cloud DashScope) | Chat Completions (compatible OpenAI) | SSE |
 
-"Structuré mais non branché" signifie : la classe existe, implémente
-`AiProviderPort` avec une vraie logique d'appel HTTP, mais n'est pas un bean
-Spring — `AiProviderFactory` ne la voit donc pas (`isAvailable(provider)`
-renvoie `false`, `resolve(provider)` lève `AiProviderException`).
+Tous sont des beans Spring (`@Component`) — `AiProviderFactory` les découvre
+automatiquement (injection de `List<AiProviderPort>`), donc
+`isAvailable(provider)` vaut désormais `true` pour les huit. Un fournisseur
+sans clé API configurée (`docuai.ai.<fournisseur>.api-key`) reste un bean
+valide mais échoue à l'appel (`requireApiKey()`, message explicite) — la
+disponibilité du bean et la présence d'une vraie clé sont deux choses
+différentes. `GenerationOrchestrator` s'appuie en plus sur
+`ai_model_config.actif`/`est_defaut` (Bloc 8, `/api/v1/ai-configs`) pour
+choisir *lequel* utiliser par défaut.
 
 ## Ajouter/brancher un nouveau fournisseur (Pattern Stratégie)
 
@@ -52,10 +59,11 @@ renvoie `false`, `resolve(provider)` lève `AiProviderException`).
    (injection de `List<AiProviderPort>`).
 3. Fournir la clé API via `docuai.ai.<fournisseur>.api-key`
    (`application.yml` / variable d'environnement, cf. `.env.example`).
-4. Si le fournisseur n'est pas déjà dans la liste `OPENAI/CLAUDE/GEMINI/
-   MISTRAL/OLLAMA/DEEPSEEK`, ajouter la valeur à la fois à l'énum
-   `AiProvider` et à la contrainte `chk_ai_fournisseur` de
-   `ai_model_config` (nouvelle migration Flyway).
+4. Si le fournisseur n'est pas déjà dans l'énum `AiProvider` (`OPENAI/CLAUDE/
+   GEMINI/MISTRAL/OLLAMA/DEEPSEEK/GROQ/QWEN`), ajouter la valeur à la fois à
+   l'énum et à la contrainte `chk_ai_fournisseur` de `ai_model_config`
+   (nouvelle migration Flyway — voir V7__activate_gemini_deepseek_qwen.sql
+   pour le patron exact : contrainte + seed `ai_model_config`).
 5. Le rendre sélectionnable comme fournisseur par défaut via
    `/api/v1/ai-configs` (Bloc 8).
 

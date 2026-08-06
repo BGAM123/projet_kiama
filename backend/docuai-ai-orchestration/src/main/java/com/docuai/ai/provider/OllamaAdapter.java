@@ -9,7 +9,6 @@ import com.docuai.ai.enums.AiProvider;
 import com.docuai.ai.exception.AiProviderException;
 import com.docuai.ai.port.AiProviderPort;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
@@ -29,7 +28,6 @@ import java.util.Map;
 @Component
 public class OllamaAdapter implements AiProviderPort {
 
-    private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final String DEFAULT_MODEL = "llama3";
 
     private final WebClient webClient;
@@ -73,21 +71,21 @@ public class OllamaAdapter implements AiProviderPort {
                 .uri("/api/chat")
                 .bodyValue(body)
                 .retrieve()
-                .bodyToFlux(String.class)
-                .filter(line -> line != null && !line.isBlank())
+                // JsonNode plutôt que String : le Content-Type NDJSON d'Ollama
+                // (application/x-ndjson) n'indique pas de charset, et
+                // StringDecoder retombait sur ISO-8859-1 pour le décoder,
+                // corrompant les accents (ex. "é" -> "Ã©"). Jackson lit les
+                // octets bruts en UTF-8 (imposé par la RFC JSON), comme le
+                // fait déjà generate() via bodyToMono(JsonNode.class).
+                .bodyToFlux(JsonNode.class)
                 .mapNotNull(this::extractContent)
                 .filter(text -> text != null && !text.isEmpty())
                 .map(text -> Chunk.builder().content(text).last(false).build())
                 .onErrorMap(e -> e instanceof AiProviderException ? e : new AiProviderException("Échec du streaming Ollama.", e));
     }
 
-    private String extractContent(String line) {
-        try {
-            JsonNode node = MAPPER.readTree(line);
-            return node.path("message").path("content").asText("");
-        } catch (Exception e) {
-            return null;
-        }
+    private String extractContent(JsonNode node) {
+        return node.path("message").path("content").asText("");
     }
 
     private Map<String, Object> buildBody(GenerationRequest request, boolean stream) {

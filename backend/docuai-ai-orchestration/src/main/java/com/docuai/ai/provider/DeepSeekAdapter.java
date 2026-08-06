@@ -2,14 +2,16 @@ package com.docuai.ai.provider;
 
 import com.docuai.ai.config.AiProperties;
 import com.docuai.ai.enums.AiProvider;
+import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 
 /**
- * Adaptateur DeepSeek — structuré (API compatible Chat Completions OpenAI,
- * {@code https://api.deepseek.com}, voir {@link AbstractOpenAiStyleAdapter}),
- * non branché par défaut : pas de {@code @Component}. Pour l'activer :
- * ajouter {@code @Component} et fournir {@code docuai.ai.deepseek.api-key}.
+ * Adaptateur DeepSeek réel — API compatible Chat Completions OpenAI
+ * ({@code https://api.deepseek.com}, voir {@link AbstractOpenAiStyleAdapter}).
+ * Nécessite {@code docuai.ai.deepseek.api-key} pour être utilisable (sinon
+ * {@link #requireApiKey()} refuse l'appel avec un message explicite).
  */
+@Component
 public class DeepSeekAdapter extends AbstractOpenAiStyleAdapter {
 
     private final AiProperties.DeepSeek properties;

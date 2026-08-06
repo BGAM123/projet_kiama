@@ -69,6 +69,8 @@ export const providerLabel: Record<string, string> = {
   MISTRAL: 'Mistral AI',
   OLLAMA: 'Ollama (local)',
   DEEPSEEK: 'DeepSeek',
+  GROQ: 'Groq',
+  QWEN: 'Alibaba Qwen',
 };
 
 export function formatDateTime(iso: string): string {

@@ -16,6 +16,7 @@ import {
   ArrowLeft,
   Bold,
   CheckCircle2,
+  Download,
   FileDown,
   Heading1,
   Heading2,
@@ -36,9 +37,10 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { useGeneration, useDocumentTypes } from '@/lib/hooks/queries';
+import { useGeneration, useDocumentTypes, useStructure } from '@/lib/hooks/queries';
 import { updateGeneration, exportDocument } from '@/lib/api/client';
 import { getStructureFor } from '@/lib/api/generator';
 import { GeneratedStatusBadge } from '@/components/status-badge';
@@ -55,6 +57,7 @@ export default function EditorPage() {
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const docType = documentTypes?.find((d: DocumentType) => d.id === doc?.documentTypeId);
+  const { data: structure } = useStructure(doc?.documentTypeId || null);
 
   const editor = useEditor({
     extensions: [
@@ -117,7 +120,13 @@ export default function EditorPage() {
       // Export réel via POST /api/v1/export — cf. chat/page.tsx (même
       // correction, écart 1.13 du rapport d'écarts).
       const content = editor?.getHTML() ?? doc?.content ?? '';
-      const blob = await exportDocument({ title: doc?.contentPivot || 'document', content, format });
+      const blob = await exportDocument({
+        title: doc?.contentPivot || 'document',
+        content,
+        format,
+        headerText: structure?.headerText,
+        footerText: structure?.footerText,
+      });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -164,6 +173,16 @@ export default function EditorPage() {
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
+                {currentDoc.exportUrl && (
+                  <>
+                    <DropdownMenuItem asChild>
+                      <a href={currentDoc.exportUrl} target="_blank" rel="noopener noreferrer">
+                        <Download className="mr-2 h-4 w-4" /> Télécharger (Word)
+                      </a>
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                  </>
+                )}
                 <DropdownMenuItem onClick={() => handleExport('DOCX')}><FileDown className="mr-2 h-4 w-4" /> DOCX (Word)</DropdownMenuItem>
                 <DropdownMenuItem onClick={() => handleExport('PDF')}><FileDown className="mr-2 h-4 w-4" /> PDF</DropdownMenuItem>
                 <DropdownMenuItem onClick={() => handleExport('Markdown')}><FileDown className="mr-2 h-4 w-4" /> Markdown</DropdownMenuItem>

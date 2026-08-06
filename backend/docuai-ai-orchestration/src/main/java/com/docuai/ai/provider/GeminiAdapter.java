@@ -12,6 +12,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.codec.ServerSentEvent;
+import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
 
@@ -21,14 +22,15 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Adaptateur Gemini — structuré (Generative Language API,
- * {@code models/{model}:generateContent} / {@code :streamGenerateContent?alt=sse}),
- * non branché par défaut : pas de {@code @Component}. Format de requête
- * différent d'OpenAI/Claude ({@code contents[].parts[].text}, rôles
- * "user"/"model", clé API en paramètre de requête {@code ?key=}) — pas de
- * mutualisation possible avec {@link AbstractOpenAiStyleAdapter}. Pour
- * l'activer : ajouter {@code @Component} et fournir {@code docuai.ai.gemini.api-key}.
+ * Adaptateur Gemini réel — Generative Language API,
+ * {@code models/{model}:generateContent} / {@code :streamGenerateContent?alt=sse}.
+ * Format de requête différent d'OpenAI/Claude ({@code contents[].parts[].text},
+ * rôles "user"/"model", clé API en paramètre de requête {@code ?key=}) — pas
+ * de mutualisation possible avec {@link AbstractOpenAiStyleAdapter}.
+ * Nécessite {@code docuai.ai.gemini.api-key} pour être utilisable (sinon
+ * {@link #requireApiKey()} refuse l'appel avec un message explicite).
  */
+@Component
 public class GeminiAdapter implements AiProviderPort {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();

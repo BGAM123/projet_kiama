@@ -37,19 +37,22 @@ public class DocumentTypeService {
     private final DocumentTypeMapper documentTypeMapper;
     private final DocumentStructureMapper documentStructureMapper;
     private final StructureNodeMapper structureNodeMapper;
+    private final DocumentTypeContextCacheService documentTypeContextCacheService;
 
     public DocumentTypeService(DocumentTypeRepository documentTypeRepository,
                                 DocumentStructureRepository documentStructureRepository,
                                 CategorieRepository categorieRepository,
                                 DocumentTypeMapper documentTypeMapper,
                                 DocumentStructureMapper documentStructureMapper,
-                                StructureNodeMapper structureNodeMapper) {
+                                StructureNodeMapper structureNodeMapper,
+                                DocumentTypeContextCacheService documentTypeContextCacheService) {
         this.documentTypeRepository = documentTypeRepository;
         this.documentStructureRepository = documentStructureRepository;
         this.categorieRepository = categorieRepository;
         this.documentTypeMapper = documentTypeMapper;
         this.documentStructureMapper = documentStructureMapper;
         this.structureNodeMapper = structureNodeMapper;
+        this.documentTypeContextCacheService = documentTypeContextCacheService;
     }
 
     @Transactional(readOnly = true)
@@ -123,7 +126,9 @@ public class DocumentTypeService {
     public DocumentStructureDTO updateStructure(UUID documentTypeId, UpdateStructureRequest request) {
         DocumentStructure structure = findStructureEntity(documentTypeId);
         structure.setArbreJson(structureNodeMapper.toEntityList(request.getTree()));
-        return documentStructureMapper.toDto(documentStructureRepository.save(structure));
+        DocumentStructureDTO dto = documentStructureMapper.toDto(documentStructureRepository.save(structure));
+        documentTypeContextCacheService.evict(documentTypeId);
+        return dto;
     }
 
     private DocumentStructure findStructureEntity(UUID documentTypeId) {

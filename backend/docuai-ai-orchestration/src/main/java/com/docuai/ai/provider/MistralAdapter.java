@@ -2,15 +2,16 @@ package com.docuai.ai.provider;
 
 import com.docuai.ai.config.AiProperties;
 import com.docuai.ai.enums.AiProvider;
+import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 
 /**
- * Adaptateur Mistral — structuré (API "La Plateforme" compatible Chat
- * Completions OpenAI, voir {@link AbstractOpenAiStyleAdapter}), non branché
- * par défaut : pas de {@code @Component}, donc non auto-découvert par
- * {@code AiProviderFactory}. Pour l'activer : ajouter {@code @Component} et
- * fournir {@code docuai.ai.mistral.api-key} (voir README du module).
+ * Adaptateur Mistral — API "La Plateforme" compatible Chat Completions OpenAI
+ * (voir {@link AbstractOpenAiStyleAdapter}). Nécessite
+ * {@code docuai.ai.mistral.api-key} pour être utilisable (sinon
+ * {@link #requireApiKey()} refuse l'appel avec un message explicite).
  */
+@Component
 public class MistralAdapter extends AbstractOpenAiStyleAdapter {
 
     private final AiProperties.Mistral properties;

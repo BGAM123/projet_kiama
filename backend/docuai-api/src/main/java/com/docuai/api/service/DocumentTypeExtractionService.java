@@ -58,6 +58,7 @@ public class DocumentTypeExtractionService {
     private final DocumentStructureRepository documentStructureRepository;
     private final CategorieRepository categorieRepository;
     private final DocumentTypeMapper documentTypeMapper;
+    private final DocumentTypeContextCacheService documentTypeContextCacheService;
 
     public DocumentTypeExtractionService(FileIngestionService fileIngestionService,
                                           StructureExtractionService structureExtractionService,
@@ -67,7 +68,8 @@ public class DocumentTypeExtractionService {
                                           DocumentTypeRepository documentTypeRepository,
                                           DocumentStructureRepository documentStructureRepository,
                                           CategorieRepository categorieRepository,
-                                          DocumentTypeMapper documentTypeMapper) {
+                                          DocumentTypeMapper documentTypeMapper,
+                                          DocumentTypeContextCacheService documentTypeContextCacheService) {
         this.fileIngestionService = fileIngestionService;
         this.structureExtractionService = structureExtractionService;
         this.textExtractionService = textExtractionService;
@@ -77,6 +79,7 @@ public class DocumentTypeExtractionService {
         this.documentStructureRepository = documentStructureRepository;
         this.categorieRepository = categorieRepository;
         this.documentTypeMapper = documentTypeMapper;
+        this.documentTypeContextCacheService = documentTypeContextCacheService;
     }
 
     @Transactional
@@ -127,12 +130,16 @@ public class DocumentTypeExtractionService {
             tree.addAll(structureExtractionService.extract(content, extension, fallbackRawText));
 
             boolean hasToc = tree.stream().anyMatch(n -> "heading".equals(n.getType()) && n.getLevel() != null && n.getLevel() == 1);
+            StructureExtractionService.HeaderFooterText headerFooter = structureExtractionService.extractHeaderFooter(content, extension);
 
             DocumentStructure structure = documentStructureRepository.findByDocumentType_Id(documentType.getId())
                     .orElseGet(() -> DocumentStructure.builder().documentType(documentType).build());
             structure.setArbreJson(tree);
             structure.setPossedeToc(hasToc);
+            structure.setHeaderText(headerFooter.headerText());
+            structure.setFooterText(headerFooter.footerText());
             documentStructureRepository.save(structure);
+            documentTypeContextCacheService.evict(documentType.getId());
 
             documentType.setStatut(DocumentTypeStatut.STRUCTURE_EXTRAITE);
         } catch (Exception e) {

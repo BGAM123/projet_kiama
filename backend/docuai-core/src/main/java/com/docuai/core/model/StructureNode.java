@@ -25,4 +25,7 @@ public class StructureNode {
     private String label;
     private List<StructureNode> children;
     private List<String> columns;
+    /** Section obligatoire — {@code null} traité comme {@code true} (comportement historique, tous les nœuds étaient implicitement requis avant l'ajout de ce champ). */
+    private Boolean required;
+    private SectionConstraints constraints;
 }

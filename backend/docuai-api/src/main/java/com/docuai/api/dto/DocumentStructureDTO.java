@@ -14,4 +14,6 @@ public class DocumentStructureDTO {
     private UUID documentTypeId;
     private List<StructureNodeDTO> tree;
     private Boolean hasToc;
+    private String headerText;
+    private String footerText;
 }

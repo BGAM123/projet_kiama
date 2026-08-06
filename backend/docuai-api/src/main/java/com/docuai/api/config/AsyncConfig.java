@@ -17,7 +17,7 @@ import java.util.concurrent.Executor;
  */
 @Configuration
 @EnableAsync
-@EnableConfigurationProperties(GenerationProperties.class)
+@EnableConfigurationProperties({GenerationProperties.class, ConversationProperties.class})
 public class AsyncConfig {
 
     @Bean(name = "taskExecutor")

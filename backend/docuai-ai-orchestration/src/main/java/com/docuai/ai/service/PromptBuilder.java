@@ -27,7 +27,7 @@ public class PromptBuilder {
         }
         if (expectedStructure != null && !expectedStructure.isEmpty()) {
             sb.append("\n\nStructure attendue du document (respecte l'ordre et les niveaux de titres, format Markdown) :\n");
-            sb.append(renderStructure(expectedStructure));
+            sb.append(renderStructureBlock(expectedStructure));
         }
         return sb.toString();
     }
@@ -53,7 +53,15 @@ public class PromptBuilder {
         };
     }
 
-    private String renderStructure(List<StructureNode> nodes) {
+    /**
+     * Rendu textuel de l'arbre de structure (titres Markdown `#`..`###` par
+     * niveau, tableaux signalés entre crochets) — extrait de
+     * {@link #buildSystemPrompt} pour être réutilisable telle quelle par
+     * {@code ConversationService} (Bloc 6, chat), qui construit son propre
+     * préambule mais veut ancrer ses réponses sur la même structure attendue
+     * que la génération.
+     */
+    public String renderStructureBlock(List<StructureNode> nodes) {
         StringBuilder sb = new StringBuilder();
         for (StructureNode node : nodes) {
             if ("heading".equals(node.getType())) {

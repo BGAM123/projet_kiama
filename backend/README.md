@@ -105,6 +105,16 @@ Voir `ARCHITECTURE.md` pour le détail de l'arborescence proposée.
       (`CONVERSATION_USE`) — l'envoi d'un message appelle réellement
       `GenerationOrchestrator` (Bloc 5) pour la réponse assistant, avec repli
       sur un message générique si aucun fournisseur IA n'est disponible.
+      Le prompt système du chat ancre désormais ses propositions sur la
+      **structure attendue du Document Type sélectionné**
+      (`ConversationService.expectedStructureFor` + `PromptBuilder`
+      `.renderStructureBlock()`, méthode extraite/rendue publique — même
+      rendu Markdown des titres/tableaux que la génération, réutilisé tel
+      quel plutôt que dupliqué) au lieu de ne mentionner que son nom ; le
+      préambule demande aussi explicitement à l'IA d'intégrer les
+      recommandations formulées par l'utilisateur dans la conversation.
+      Vérifié : une consigne du type « mets l'accent sur la confidentialité »
+      dans le chat se traduit par une section dédiée dans le plan proposé.
       `GET/POST /api/v1/conversations/{id}/reference-documents` (multipart) :
       upload MinIO (bucket `docuai.minio.bucket-references`) + indexation RAG
       (`ChunkingService`/`EmbeddingService`/`DocumentChunkRepository`) —
@@ -131,8 +141,84 @@ Voir `ARCHITECTURE.md` pour le détail de l'arborescence proposée.
       /api/v1/generations/{id}` (`DOCUMENT_EDIT_OWN`, propriétaire uniquement)
       pour l'édition manuelle du contenu (statut -> `EN_EDITION`).
       **En attente de validation avant de poursuivre le Bloc 7.**
-- [ ] Bloc 7 — Export (DOCX/PDF/Markdown)
-- [ ] Bloc 8 — Transverses (dashboard, notifications, journal d'activité, `/ai-configs`)
+- [x] **Amélioration post-Bloc 8 — titres hiérarchiques, tableaux, en-tête/pied
+      de page** : `GenerationSectionNode`/`GenerationSection` (TS) portent
+      désormais `type`/`level`/`columns` (copiés depuis `StructureNode` par
+      `GenerationService.buildInitialSections`, jusque-là perdus). Effets
+      concrets côté `GenerationStreamService` : l'assemblage utilise le
+      **vrai niveau de titre** (`#`/`##`/`###`) au lieu d'un `##` fixe pour
+      toutes les sections, et une section de type `table` reçoit une
+      consigne de prompt explicite avec **les colonnes exactement extraites**
+      du document source (au lieu de laisser le modèle inventer sa propre
+      structure). `StructureExtractionService.extractHeaderFooter()`
+      (DOCX uniquement) lit `document.getHeaderList()`/`getFooterList()`
+      (Apache POI) — texte statique, jamais généré par l'IA, persisté sur
+      `DocumentStructure.headerText`/`footerText` (migration
+      `V4__add_document_structure_header_footer.sql`). Module `docuai-export`
+      réécrit pour interpréter ce Markdown au lieu de l'aplatir en texte brut
+      (`MarkdownContentParser`, nouveau) : `DocxDocumentExporter` produit un
+      vrai `w:outlineLvl` par titre (reconnu par le volet de navigation Word
+      même sans style "HeadingN" défini) et un vrai `XWPFTable` ; en-tête/pied
+      via `XWPFHeaderFooterPolicy` (package `org.apache.poi.xwpf.model`, pas
+      `usermodel`). `PdfDocumentExporter` : taille de police dégressive par
+      niveau, grille de tableau dessinée manuellement (PDFBox n'a pas d'API
+      tableau native), en-tête/pied répétés sur chaque page en un second
+      passage une fois la pagination connue. `POST /api/v1/export` accepte
+      deux champs optionnels `headerText`/`footerText` ; le frontend les
+      récupère via `useStructure(documentTypeId)` (déjà chargé côté
+      `chat/page.tsx`, ajouté côté `editor/[id]/page.tsx`) et les transmet à
+      `exportDocument()`. Vérifié de bout en bout (export DOCX inspecté
+      octet par octet : `outlineLvl` 0/1/2 corrects, `header1.xml`/`footer1.xml`
+      présents, `<w:tbl>` réel ; export PDF vérifié via `pdftotext` ; section
+      table testée en génération réelle (Groq) — colonnes du tableau généré
+      identiques à celles extraites du document source).
+      **Limitation connue** : PDFBox (polices standard Helvetica) rend mal
+      certains caractères accentués dans le PDF exporté — préexistant, hors
+      scope de cette amélioration.
+- [x] **Bloc 7 — Export (DOCX/PDF/Markdown)** : nouveau module `docuai-export`
+      (dépendances déjà déclarées côté `pom.xml` — Apache POI 5.3.0, PDFBox
+      3.0.3 — restées sans code jusqu'ici). `DocumentExporter` (Pattern
+      Stratégie, un `@Component` par format : `DocxDocumentExporter`,
+      `PdfDocumentExporter`, `MarkdownDocumentExporter`) + `ExportService`
+      (résolution par `ExportFormat`, auto-découverte Spring). `POST
+      /api/v1/export` (`DOCUMENT_EXPORT`, permission déjà seedée en V2) prend
+      `{title, content, format}` et renvoie le binaire brut
+      (`ResponseEntity<byte[]>`, `Content-Disposition: attachment`, exclu de
+      l'enveloppe `ApiResponse` via le content-type non-JSON — pas
+      d'exclusion supplémentaire à coder dans `ApiResponseWrapperAdvice`).
+      Export volontairement minimaliste : texte brut structuré (titre +
+      paragraphes, retour à la ligne manuel par largeur de police pour le
+      PDF), pas de reproduction de mise en forme riche — cohérent avec
+      l'extraction Tika du Bloc 4. Aucune migration Flyway nécessaire.
+- [x] **Bloc 8 — Dashboard + configurations IA** : `GET
+      /api/v1/dashboard/stats?userId=` (`DASHBOARD_READ_OWN`/
+      `DASHBOARD_READ_ALL`, propriété vérifiée comme pour l'historique du
+      Bloc 6) agrège `documentsThisMonth`/`successRate`/`byCategory`/
+      `last7Days` depuis `DocumentGenere` (nouvelle méthode de repository en
+      fetch-join, `findByUtilisateurIdWithDocumentTypeAndCategorie`, pour
+      éviter le lazy-loading N+1 sur `documentType.categorie`) et
+      `activeDocumentTypes` depuis `DocumentType`. `averageGenerationTimeSec`
+      reste une approximation (`dateMaj - dateCreation` sur les documents en
+      statut de succès) mais est désormais réellement calculée — `dateMaj`
+      était déjà positionné par `GenerationStreamService` à la fin d'une
+      génération SSE, aucune modification nécessaire de ce côté. `GET/PATCH
+      /api/v1/ai-configs` (`AI_CONFIG_MANAGE`) expose `AiModelConfig`
+      (mapping MapStruct français → anglais, même convention que les autres
+      DTO) ; une mise à jour avec `isDefault:true` réaffecte automatiquement
+      `estDefaut=false` sur les autres configurations. Aucune migration
+      Flyway nécessaire (permissions déjà seedées en V2).
+      Notifications (`/api/v1/notifications/user/{userId}`, `PUT
+      .../read`) et lecture du journal d'activité (`GET /admin/logs`)
+      existaient déjà avant cette session, non retouchées ici. **Limitations
+      connues** : `journal_activite` n'a toujours aucun writer (la table
+      reste vide en usage réel, rien n'y insère de ligne) et `GET
+      /admin/logs` reste limité aux 10 dernières entrées sans pagination
+      serveur ; la sélection du fournisseur IA par défaut configurée via
+      `/ai-configs` n'est pas encore lue par `AiOrchestratorService`
+      (toujours OpenAI puis premier disponible, cf. Bloc 5).
+      **Backend non compilé dans cette session** (pas de `mvn`/JDK 21/Docker
+      disponibles dans cet environnement) — à valider avant mise en service,
+      voir « Build local » plus bas.
 - [ ] Bloc 9 — Finalisation (durcissement OWASP, tests, Postman/.http, doc Swagger)
 
 ---
@@ -333,6 +419,59 @@ curl -s -X PATCH http://localhost:8080/api/v1/generations/$GEN_ID \
 # Utilisateur non-admin sur la génération d'un autre utilisateur -> 403
 curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8080/api/v1/generations/$GEN_ID \
   -H "Authorization: Bearer $USER_ACCESS"
+```
+
+### Tester le Bloc 7 (export)
+
+```bash
+# DOCX
+curl -s -X POST http://localhost:8080/api/v1/export \
+  -H "Authorization: Bearer $ACCESS" -H "Content-Type: application/json" \
+  -d '{"title":"Contrat de test","content":"Première section.\nDeuxième section."}' \
+  -o /tmp/export-manque-format.json  # -> 400, "format" est requis (@NotNull)
+
+curl -s -X POST http://localhost:8080/api/v1/export \
+  -H "Authorization: Bearer $ACCESS" -H "Content-Type: application/json" \
+  -d '{"title":"Contrat de test","content":"Première section.\nDeuxième section.","format":"DOCX"}' \
+  -o /tmp/export.docx
+file /tmp/export.docx   # -> Microsoft Word 2007+
+
+# PDF
+curl -s -X POST http://localhost:8080/api/v1/export \
+  -H "Authorization: Bearer $ACCESS" -H "Content-Type: application/json" \
+  -d '{"title":"Contrat de test","content":"Première section.\nDeuxième section.","format":"PDF"}' \
+  -o /tmp/export.pdf
+file /tmp/export.pdf    # -> PDF document
+
+# Markdown
+curl -s -X POST http://localhost:8080/api/v1/export \
+  -H "Authorization: Bearer $ACCESS" -H "Content-Type: application/json" \
+  -d '{"title":"Contrat de test","content":"Première section.\nDeuxième section.","format":"MARKDOWN"}' \
+  -o /tmp/export.md
+cat /tmp/export.md
+```
+
+### Tester le Bloc 8 (dashboard, configurations IA)
+
+```bash
+# Dashboard de l'utilisateur connecté
+curl -s "http://localhost:8080/api/v1/dashboard/stats?userId=$USER_ID" -H "Authorization: Bearer $ACCESS"
+
+# Utilisateur non-admin consultant le dashboard d'un autre utilisateur -> 403
+curl -s -o /dev/null -w "%{http_code}\n" \
+  "http://localhost:8080/api/v1/dashboard/stats?userId=$USER_ID" -H "Authorization: Bearer $USER_ACCESS"
+
+# Configurations IA (admin uniquement)
+curl -s http://localhost:8080/api/v1/ai-configs -H "Authorization: Bearer $ACCESS" | tee /tmp/ai-configs.json
+AI_CONFIG_ID=$(jq -r '.data[0].id' /tmp/ai-configs.json)
+
+curl -s -X PATCH http://localhost:8080/api/v1/ai-configs/$AI_CONFIG_ID \
+  -H "Authorization: Bearer $ACCESS" -H "Content-Type: application/json" \
+  -d '{"isDefault":true}'
+# -> vérifier qu'un seul isDefault:true subsiste sur GET /ai-configs
+
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8080/api/v1/ai-configs -H "Authorization: Bearer $USER_ACCESS"
+# -> 403 (AI_CONFIG_MANAGE réservé à ADMIN)
 ```
 
 ### Console MinIO

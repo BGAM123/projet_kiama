@@ -17,6 +17,10 @@ import com.docuai.core.repository.DocumentGenereRepository;
 import com.docuai.core.repository.DocumentStructureRepository;
 import com.docuai.core.repository.DocumentTypeRepository;
 import com.docuai.core.repository.UtilisateurRepository;
+import com.docuai.extraction.config.MinioProperties;
+import com.docuai.extraction.storage.ObjectStorageService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -29,10 +33,15 @@ import java.util.UUID;
 /**
  * Service applicatif : cycle de vie d'un document généré (création, lecture,
  * édition manuelle). Le déroulement effectif de la génération section par
- * section (appels IA, SSE) relève de {@link GenerationStreamService}.
+ * section (appels IA, SSE) relève de {@link GenerationStreamService}, y
+ * compris l'export automatique vers MinIO à l'issue d'une génération réussie
+ * — ce service-ci se contente de résoudre l'URL de téléchargement pré-signée
+ * correspondante quand {@code minioObjectKey} est renseigné.
  */
 @Service
 public class GenerationService {
+
+    private static final Logger log = LoggerFactory.getLogger(GenerationService.class);
 
     private final DocumentGenereRepository documentGenereRepository;
     private final DocumentTypeRepository documentTypeRepository;
@@ -40,19 +49,25 @@ public class GenerationService {
     private final UtilisateurRepository utilisateurRepository;
     private final ConversationService conversationService;
     private final GenerationMapper generationMapper;
+    private final ObjectStorageService objectStorageService;
+    private final MinioProperties minioProperties;
 
     public GenerationService(DocumentGenereRepository documentGenereRepository,
                               DocumentTypeRepository documentTypeRepository,
                               DocumentStructureRepository documentStructureRepository,
                               UtilisateurRepository utilisateurRepository,
                               ConversationService conversationService,
-                              GenerationMapper generationMapper) {
+                              GenerationMapper generationMapper,
+                              ObjectStorageService objectStorageService,
+                              MinioProperties minioProperties) {
         this.documentGenereRepository = documentGenereRepository;
         this.documentTypeRepository = documentTypeRepository;
         this.documentStructureRepository = documentStructureRepository;
         this.utilisateurRepository = utilisateurRepository;
         this.conversationService = conversationService;
         this.generationMapper = generationMapper;
+        this.objectStorageService = objectStorageService;
+        this.minioProperties = minioProperties;
     }
 
     /**
@@ -86,7 +101,7 @@ public class GenerationService {
                 .sections(buildInitialSections(documentType.getId()))
                 .build();
 
-        return generationMapper.toDto(documentGenereRepository.save(document));
+        return toDtoWithExportUrl(documentGenereRepository.save(document));
     }
 
     private List<GenerationSectionNode> buildInitialSections(UUID documentTypeId) {
@@ -102,6 +117,11 @@ public class GenerationService {
                                 .label(node.getLabel())
                                 .status("PENDING")
                                 .content("")
+                                .type(node.getType())
+                                .level(node.getLevel())
+                                .columns(node.getColumns())
+                                .required(node.getRequired())
+                                .constraints(node.getConstraints())
                                 .build());
                     }
                 });
@@ -112,7 +132,7 @@ public class GenerationService {
     public GeneratedDocumentDTO getById(UUID id, UUID requestingUserId, boolean isAdmin) {
         DocumentGenere document = findEntity(id);
         checkOwnership(document, requestingUserId, isAdmin);
-        return generationMapper.toDto(document);
+        return toDtoWithExportUrl(document);
     }
 
     @Transactional(readOnly = true)
@@ -120,7 +140,9 @@ public class GenerationService {
         if (!isAdmin && !userId.equals(requestingUserId)) {
             throw new AccessDeniedException("Vous ne pouvez consulter que votre propre historique.");
         }
-        return generationMapper.toDtoList(documentGenereRepository.findByUtilisateur_IdOrderByDateCreationDesc(userId));
+        return documentGenereRepository.findByUtilisateur_IdOrderByDateCreationDesc(userId).stream()
+                .map(this::toDtoWithExportUrl)
+                .toList();
     }
 
     @Transactional
@@ -129,10 +151,27 @@ public class GenerationService {
         checkOwnership(document, requestingUserId, isAdmin);
         if (request.getContent() != null) {
             document.setContenu(request.getContent());
+            // L'export automatique déjà produit ne correspond plus au contenu édité : mieux vaut l'absence
+            // d'URL de téléchargement qu'un lien pointant vers une version obsolète du document.
+            document.setMinioObjectKey(null);
+            document.setExportFormat(null);
         }
         document.setStatut(DocumentGenereStatut.EN_EDITION);
         document.setDateMaj(LocalDateTime.now());
-        return generationMapper.toDto(documentGenereRepository.save(document));
+        return toDtoWithExportUrl(documentGenereRepository.save(document));
+    }
+
+    /** Résout l'URL de téléchargement pré-signée quand un export automatique a réussi — dégradation silencieuse si MinIO est indisponible. */
+    private GeneratedDocumentDTO toDtoWithExportUrl(DocumentGenere document) {
+        GeneratedDocumentDTO dto = generationMapper.toDto(document);
+        if (document.getMinioObjectKey() != null) {
+            try {
+                dto.setExportUrl(objectStorageService.presignedGetUrl(minioProperties.getBucketExports(), document.getMinioObjectKey()));
+            } catch (Exception e) {
+                log.warn("URL pré-signée d'export indisponible pour le document généré {} : {}", document.getId(), e.getMessage());
+            }
+        }
+        return dto;
     }
 
     DocumentGenere findEntity(UUID id) {

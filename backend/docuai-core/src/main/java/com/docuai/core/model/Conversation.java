@@ -33,6 +33,13 @@ public class Conversation {
     @Column(name = "titre", length = 255)
     private String titre;
 
+    /** Résumé glissant des messages sortis de la fenêtre récente (ConversationService) — voir V5__add_conversation_context_summary.sql. */
+    @Column(name = "context_summary", columnDefinition = "TEXT")
+    private String contextSummary;
+
+    @Column(name = "context_summary_upto_message_id")
+    private UUID contextSummaryUpToMessageId;
+
     @Column(name = "date_creation", nullable = false, updatable = false)
     @Builder.Default
     private LocalDateTime dateCreation = LocalDateTime.now();

@@ -11,5 +11,7 @@ public enum AiProvider {
     GEMINI,
     MISTRAL,
     OLLAMA,
-    DEEPSEEK
+    DEEPSEEK,
+    GROQ,
+    QWEN
 }

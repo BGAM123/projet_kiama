@@ -23,4 +23,6 @@ public class GeneratedDocumentDTO {
     private List<GenerationSectionDTO> sections;
     private String createdAt;
     private String updatedAt;
+    /** URL de téléchargement pré-signée (MinIO, TTL docuai.minio.presigned-url-ttl-seconds) — absente tant qu'aucun export automatique n'a réussi. */
+    private String exportUrl;
 }

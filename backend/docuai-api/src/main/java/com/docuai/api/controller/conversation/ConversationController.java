@@ -4,6 +4,7 @@ import com.docuai.api.dto.ApiResponse;
 import com.docuai.api.dto.ConversationDTO;
 import com.docuai.api.dto.CreateConversationRequest;
 import com.docuai.api.dto.MessageDTO;
+import com.docuai.api.dto.PageMeta;
 import com.docuai.api.dto.ReferenceDocumentDTO;
 import com.docuai.api.dto.SendMessageRequest;
 import com.docuai.api.service.ConversationService;
@@ -11,6 +12,9 @@ import com.docuai.security.service.UserDetailsImpl;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.method.P;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -57,11 +61,14 @@ public class ConversationController {
 
     @GetMapping("/{id}/messages")
     @PreAuthorize("hasAuthority('CONVERSATION_USE')")
-    @Operation(summary = "Lister les messages d'une conversation")
+    @Operation(summary = "Lister les messages d'une conversation (paginé, ordre chronologique)")
     public ResponseEntity<ApiResponse<List<MessageDTO>>> listMessages(@PathVariable UUID id,
+                                                                       @RequestParam(defaultValue = "0") int page,
+                                                                       @RequestParam(defaultValue = "20") int size,
                                                                        @AuthenticationPrincipal UserDetailsImpl principal) {
-        return ResponseEntity.ok(ApiResponse.success(
-                conversationService.listMessages(id, principal.getUtilisateur().getId(), isAdmin(principal))));
+        Pageable pageable = PageRequest.of(Math.max(page, 0), Math.min(Math.max(size, 1), 100));
+        Page<MessageDTO> result = conversationService.listMessages(id, pageable, principal.getUtilisateur().getId(), isAdmin(principal));
+        return ResponseEntity.ok(ApiResponse.success(result.getContent(), PageMeta.of(result)));
     }
 
     @PostMapping("/{id}/messages")

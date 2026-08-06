@@ -11,14 +11,25 @@ export function getStructureFor(documentTypeId: string): StructureNode[] {
   return structures.find((s) => s.documentTypeId === documentTypeId)?.tree ?? [];
 }
 
-// Contrat d'événement inchangé — c'est celui déjà émis par le backend
-// (GenerationStreamService), un objet JSON par ligne SSE.
+// Contrat d'événement émis par le backend (GenerationStreamService), un objet
+// JSON par ligne SSE. `delta` porte un fragment incrémental de texte (pas le
+// contenu accumulé — au client de concaténer) : la section s'écrit
+// progressivement, comme chez Claude, plutôt que d'apparaître d'un bloc à la
+// fin. `progress` est émis à CHAQUE tentative de génération d'une section
+// (pas seulement la première) — y compris lors d'un retry correctif après
+// violation de contrainte — et sert de signal pour réinitialiser l'aperçu en
+// direct avant que les `delta` de la nouvelle tentative n'arrivent. `error`
+// (code/message) est émis quand le verrou Redis anti-génération concurrente
+// refuse la demande (GENERATION_IN_PROGRESS) — le flux se termine alors
+// directement après, sans événement `done`.
 export interface StreamEvent {
-  type: 'progress' | 'section' | 'done';
+  type: 'progress' | 'delta' | 'section' | 'done' | 'error';
   sectionIndex?: number;
   total?: number;
   sectionLabel?: string;
   content?: string;
+  code?: string;
+  message?: string;
 }
 
 /**
@@ -91,7 +102,16 @@ export async function* streamGeneration(
   for await (const evt of readSseEvents(`${API_BASE_URL}/generations/${doc.id}/stream`)) {
     if (evt.type === 'progress' && evt.sectionIndex !== undefined) {
       const idx = evt.sectionIndex;
-      sections = sections.map((s, i) => (i === idx ? { ...s, status: 'GENERATING' } : s));
+      // content: '' réinitialise l'aperçu en direct — un "progress" arrive à
+      // chaque tentative (pas seulement la 1ère), donc aussi avant un retry
+      // correctif : sans ce reset, le nouveau texte s'ajouterait à l'ancien
+      // au lieu de le remplacer.
+      sections = sections.map((s, i) => (i === idx ? { ...s, status: 'GENERATING', content: '' } : s));
+      onUpdate({ sections });
+    } else if (evt.type === 'delta' && evt.sectionIndex !== undefined) {
+      const idx = evt.sectionIndex;
+      const piece = evt.content ?? '';
+      sections = sections.map((s, i) => (i === idx ? { ...s, content: (s.content ?? '') + piece } : s));
       onUpdate({ sections });
     } else if (evt.type === 'section' && evt.sectionIndex !== undefined) {
       const idx = evt.sectionIndex;

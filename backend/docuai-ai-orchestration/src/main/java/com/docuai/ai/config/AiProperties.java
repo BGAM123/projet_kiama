@@ -20,6 +20,8 @@ public class AiProperties {
     private final Gemini gemini = new Gemini();
     private final Mistral mistral = new Mistral();
     private final DeepSeek deepseek = new DeepSeek();
+    private final Groq groq = new Groq();
+    private final Qwen qwen = new Qwen();
 
     @Getter
     @Setter
@@ -62,5 +64,20 @@ public class AiProperties {
     public static class DeepSeek {
         private String apiKey;
         private String baseUrl = "https://api.deepseek.com";
+    }
+
+    @Getter
+    @Setter
+    public static class Groq {
+        private String apiKey;
+        private String baseUrl = "https://api.groq.com/openai/v1";
+    }
+
+    /** DashScope (Alibaba Cloud) expose Qwen via un mode "compatible OpenAI" — même contrat que Mistral/DeepSeek/Groq. */
+    @Getter
+    @Setter
+    public static class Qwen {
+        private String apiKey;
+        private String baseUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1";
     }
 }

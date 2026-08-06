@@ -6,6 +6,8 @@ import com.docuai.ai.exception.AiProviderException;
 import com.docuai.ai.rag.ChunkingService;
 import com.docuai.ai.rag.EmbeddingService;
 import com.docuai.ai.service.GenerationOrchestrator;
+import com.docuai.ai.service.PromptBuilder;
+import com.docuai.api.config.ConversationProperties;
 import com.docuai.api.config.GenerationProperties;
 import com.docuai.api.dto.ConversationDTO;
 import com.docuai.api.dto.CreateConversationRequest;
@@ -18,13 +20,16 @@ import com.docuai.api.mapper.ReferenceDocumentMapper;
 import com.docuai.core.model.Conversation;
 import com.docuai.core.model.DocumentChunk;
 import com.docuai.core.model.DocumentReference;
+import com.docuai.core.model.DocumentStructure;
 import com.docuai.core.model.DocumentType;
 import com.docuai.core.model.Message;
 import com.docuai.core.model.MessageRole;
+import com.docuai.core.model.StructureNode;
 import com.docuai.core.model.Utilisateur;
 import com.docuai.core.repository.ConversationRepository;
 import com.docuai.core.repository.DocumentChunkRepository;
 import com.docuai.core.repository.DocumentReferenceRepository;
+import com.docuai.core.repository.DocumentStructureRepository;
 import com.docuai.core.repository.DocumentTypeRepository;
 import com.docuai.core.repository.MessageRepository;
 import com.docuai.core.repository.UtilisateurRepository;
@@ -35,6 +40,8 @@ import com.docuai.extraction.text.ExtractedText;
 import com.docuai.extraction.text.TextExtractionService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -66,15 +73,19 @@ public class ConversationService {
     private final DocumentChunkRepository documentChunkRepository;
     private final UtilisateurRepository utilisateurRepository;
     private final DocumentTypeRepository documentTypeRepository;
+    private final DocumentStructureRepository documentStructureRepository;
     private final ConversationMapper conversationMapper;
     private final ReferenceDocumentMapper referenceDocumentMapper;
     private final TextExtractionService textExtractionService;
     private final ObjectStorageService objectStorageService;
     private final MinioProperties minioProperties;
     private final GenerationProperties generationProperties;
+    private final ConversationProperties conversationProperties;
     private final GenerationOrchestrator generationOrchestrator;
+    private final PromptBuilder promptBuilder;
     private final ChunkingService chunkingService;
     private final EmbeddingService embeddingService;
+    private final DocumentTypeContextCacheService documentTypeContextCacheService;
 
     public ConversationService(ConversationRepository conversationRepository,
                                 MessageRepository messageRepository,
@@ -82,30 +93,38 @@ public class ConversationService {
                                 DocumentChunkRepository documentChunkRepository,
                                 UtilisateurRepository utilisateurRepository,
                                 DocumentTypeRepository documentTypeRepository,
+                                DocumentStructureRepository documentStructureRepository,
                                 ConversationMapper conversationMapper,
                                 ReferenceDocumentMapper referenceDocumentMapper,
                                 TextExtractionService textExtractionService,
                                 ObjectStorageService objectStorageService,
                                 MinioProperties minioProperties,
                                 GenerationProperties generationProperties,
+                                ConversationProperties conversationProperties,
                                 GenerationOrchestrator generationOrchestrator,
+                                PromptBuilder promptBuilder,
                                 ChunkingService chunkingService,
-                                EmbeddingService embeddingService) {
+                                EmbeddingService embeddingService,
+                                DocumentTypeContextCacheService documentTypeContextCacheService) {
         this.conversationRepository = conversationRepository;
         this.messageRepository = messageRepository;
         this.documentReferenceRepository = documentReferenceRepository;
         this.documentChunkRepository = documentChunkRepository;
         this.utilisateurRepository = utilisateurRepository;
         this.documentTypeRepository = documentTypeRepository;
+        this.documentStructureRepository = documentStructureRepository;
         this.conversationMapper = conversationMapper;
         this.referenceDocumentMapper = referenceDocumentMapper;
         this.textExtractionService = textExtractionService;
         this.objectStorageService = objectStorageService;
         this.minioProperties = minioProperties;
         this.generationProperties = generationProperties;
+        this.conversationProperties = conversationProperties;
         this.generationOrchestrator = generationOrchestrator;
+        this.promptBuilder = promptBuilder;
         this.chunkingService = chunkingService;
         this.embeddingService = embeddingService;
+        this.documentTypeContextCacheService = documentTypeContextCacheService;
     }
 
     @Transactional
@@ -132,13 +151,11 @@ public class ConversationService {
     }
 
     @Transactional(readOnly = true)
-    public List<MessageDTO> listMessages(UUID conversationId, UUID requestingUserId, boolean isAdmin) {
+    public Page<MessageDTO> listMessages(UUID conversationId, Pageable pageable, UUID requestingUserId, boolean isAdmin) {
         Conversation conversation = findConversation(conversationId);
         checkOwnership(conversation, requestingUserId, isAdmin);
-        return messageRepository.findByConversation_IdOrderByDateCreationAsc(conversationId).stream()
-                .filter(m -> m.getRole() != MessageRole.SYSTEM)
-                .map(this::toMessageDto)
-                .toList();
+        return messageRepository.findByConversation_IdAndRoleNotOrderByDateCreationAsc(conversationId, MessageRole.SYSTEM, pageable)
+                .map(this::toMessageDto);
     }
 
     @Transactional
@@ -162,20 +179,48 @@ public class ConversationService {
         return toMessageDto(userMessage);
     }
 
+    /**
+     * Construit la réponse assistant avec une fenêtre de contexte bornée
+     * (docuai.conversation.keep-last-messages) plutôt que l'historique
+     * complet : au-delà de la fenêtre, les messages plus anciens sont
+     * condensés dans {@code conversation.contextSummary} par
+     * {@link #maybeExtendContextSummary} plutôt qu'envoyés verbatim — un
+     * historique de dialogue est séquentiel (la continuité chronologique
+     * récente prime), contrairement aux documents de référence où la
+     * recherche par similarité pgvector ({@code SimilaritySearchService})
+     * reste adaptée à un corpus hétérogène.
+     */
     private String generateAssistantReply(Conversation conversation, UUID conversationId, String newContent) {
         try {
-            List<Message> history = messageRepository.findByConversation_IdOrderByDateCreationAsc(conversationId).stream()
+            List<Message> fullHistory = messageRepository.findByConversation_IdOrderByDateCreationAsc(conversationId).stream()
                     .filter(m -> m.getRole() != MessageRole.SYSTEM)
                     .toList();
-            List<ChatMessage> chatHistory = history.stream()
+            List<Message> recentWindow = recentWindow(fullHistory);
+            maybeExtendContextSummary(conversation, fullHistory, recentWindow.size());
+
+            List<ChatMessage> chatHistory = recentWindow.stream()
                     .map(m -> ChatMessage.builder().role(m.getRole().name()).content(m.getContenu()).build())
                     .toList();
             String documentTypeName = conversation.getDocumentType() != null ? conversation.getDocumentType().getNom() : "document";
-            String systemPrompt = "Tu es l'assistant DocuAI. Tu aides l'utilisateur à préparer la génération d'un document de type « "
-                    + documentTypeName + " ». Réponds de façon concise et utile, en français sauf demande contraire.";
+            StringBuilder systemPrompt = new StringBuilder(
+                    "Tu es l'assistant DocuAI. Tu aides l'utilisateur à préparer la génération d'un document de type « "
+                            + documentTypeName + " ». Appuie-toi sur la structure attendue ci-dessous pour orienter tes "
+                            + "propositions (titres, sections, tableaux) plutôt que d'inventer un plan générique, et intègre "
+                            + "explicitement les recommandations exprimées par l'utilisateur dans la conversation. "
+                            + "Réponds de façon concise et utile, en français sauf demande contraire.");
+            if (conversation.getContextSummary() != null && !conversation.getContextSummary().isBlank()) {
+                systemPrompt.append("\n\nRésumé des échanges antérieurs (plus anciens que les messages ci-dessous) :\n")
+                        .append(conversation.getContextSummary());
+            }
+            String structureBlock = structureBlockFor(conversation);
+            if (structureBlock != null && !structureBlock.isBlank()) {
+                systemPrompt.append("\n\nStructure attendue du document « ").append(documentTypeName)
+                        .append(" » (respecte l'ordre et les niveaux de titres, format Markdown) :\n")
+                        .append(structureBlock);
+            }
 
             GenerationRequest request = GenerationRequest.builder()
-                    .systemPrompt(systemPrompt)
+                    .systemPrompt(systemPrompt.toString())
                     .userPrompt(newContent)
                     .history(chatHistory)
                     .build();
@@ -185,6 +230,100 @@ public class ConversationService {
             return "Je ne peux pas répondre pour le moment (aucun fournisseur IA disponible). "
                     + "Réessayez plus tard ou contactez un administrateur.";
         }
+    }
+
+    /** Derniers messages envoyés verbatim au LLM ; au-delà, {@link #maybeExtendContextSummary} prend le relais. */
+    private List<Message> recentWindow(List<Message> fullHistory) {
+        int keep = conversationProperties.getKeepLastMessages();
+        return fullHistory.size() > keep ? fullHistory.subList(fullHistory.size() - keep, fullHistory.size()) : fullHistory;
+    }
+
+    /**
+     * Condense dans {@code conversation.contextSummary} les messages sortis
+     * de la fenêtre récente, par lots d'au moins
+     * {@code docuai.conversation.summary-batch-size} — sans ce seuil, un
+     * appel LLM de résumé supplémentaire serait déclenché à chaque tour dès
+     * que l'historique dépasse la fenêtre (l'ancien "reste" grandit de deux
+     * messages — utilisateur + assistant — à chaque tour).
+     */
+    private void maybeExtendContextSummary(Conversation conversation, List<Message> fullHistory, int windowSize) {
+        if (fullHistory.size() <= windowSize) {
+            return;
+        }
+        List<Message> older = fullHistory.subList(0, fullHistory.size() - windowSize);
+        int cursorIndex = -1;
+        UUID upToId = conversation.getContextSummaryUpToMessageId();
+        if (upToId != null) {
+            for (int i = 0; i < older.size(); i++) {
+                if (older.get(i).getId().equals(upToId)) {
+                    cursorIndex = i;
+                    break;
+                }
+            }
+        }
+        List<Message> toSummarize = older.subList(cursorIndex + 1, older.size());
+        if (toSummarize.size() < conversationProperties.getSummaryBatchSize()) {
+            return;
+        }
+        String extended = extendSummary(conversation.getId(), conversation.getContextSummary(), toSummarize);
+        if (extended == null) {
+            return; // échec IA dégradé : on retentera au prochain lot, le résumé existant reste utilisé tel quel.
+        }
+        conversation.setContextSummary(extended);
+        conversation.setContextSummaryUpToMessageId(toSummarize.get(toSummarize.size() - 1).getId());
+        conversationRepository.save(conversation);
+    }
+
+    private String extendSummary(UUID conversationId, String existingSummary, List<Message> newMessages) {
+        StringBuilder transcript = new StringBuilder();
+        for (Message m : newMessages) {
+            transcript.append(m.getRole().name()).append(" : ").append(m.getContenu()).append('\n');
+        }
+        StringBuilder userPrompt = new StringBuilder(
+                "Résume les échanges suivants en conservant les décisions, préférences et contraintes exprimées par "
+                        + "l'utilisateur, de façon concise (quelques phrases, pas de mise en forme).");
+        if (existingSummary != null && !existingSummary.isBlank()) {
+            userPrompt.append("\n\nRésumé existant à mettre à jour :\n").append(existingSummary);
+        }
+        userPrompt.append("\n\nNouveaux échanges à intégrer :\n").append(transcript);
+
+        GenerationRequest request = GenerationRequest.builder()
+                .systemPrompt("Tu es un outil de résumé de conversation. Réponds uniquement avec le résumé mis à jour, sans préambule ni formule de politesse.")
+                .userPrompt(userPrompt.toString())
+                .build();
+        try {
+            return generationOrchestrator.generate(request).getContent();
+        } catch (AiProviderException e) {
+            log.warn("Extension du résumé de contexte impossible pour la conversation {} : {}", conversationId, e.getMessage());
+            return null;
+        }
+    }
+
+    /** Structure attendue du Document Type de la conversation (hors nœud "cover"), même filtrage que GenerationStreamService. */
+    private List<StructureNode> expectedStructureFor(Conversation conversation) {
+        if (conversation.getDocumentType() == null) {
+            return List.of();
+        }
+        return documentStructureRepository.findByDocumentType_Id(conversation.getDocumentType().getId())
+                .map(DocumentStructure::getArbreJson)
+                .orElse(List.of())
+                .stream()
+                .filter(n -> !"cover".equals(n.getType()))
+                .toList();
+    }
+
+    /** Bloc de structure attendue (Markdown) mis en cache Redis par Document Type — voir {@link DocumentTypeContextCacheService}. */
+    private String structureBlockFor(Conversation conversation) {
+        if (conversation.getDocumentType() == null) {
+            return null;
+        }
+        UUID documentTypeId = conversation.getDocumentType().getId();
+        return documentTypeContextCacheService.get(documentTypeId).orElseGet(() -> {
+            List<StructureNode> expectedStructure = expectedStructureFor(conversation);
+            String rendered = expectedStructure.isEmpty() ? "" : promptBuilder.renderStructureBlock(expectedStructure);
+            documentTypeContextCacheService.put(documentTypeId, rendered);
+            return rendered;
+        });
     }
 
     @Transactional

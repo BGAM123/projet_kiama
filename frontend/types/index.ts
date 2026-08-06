@@ -58,6 +58,14 @@ export type StructureNodeType =
   | 'list'
   | 'cover';
 
+/** Contraintes de format/longueur d'une section (validées par section, avec retry correctif, à la génération — voir SectionConstraintValidator côté backend). */
+export interface SectionConstraints {
+  minLength?: number;
+  maxLength?: number;
+  format?: string;
+  pattern?: string;
+}
+
 export interface StructureNode {
   id: string;
   type: StructureNodeType;
@@ -65,6 +73,9 @@ export interface StructureNode {
   label: string;
   children?: StructureNode[];
   columns?: string[];
+  /** Section obligatoire — absent traité comme `true` côté backend (comportement historique). */
+  required?: boolean;
+  constraints?: SectionConstraints;
 }
 
 export interface DocumentStructure {
@@ -72,6 +83,8 @@ export interface DocumentStructure {
   documentTypeId: string;
   tree: StructureNode[];
   hasToc: boolean;
+  headerText?: string;
+  footerText?: string;
 }
 
 export interface Conversation {
@@ -127,6 +140,8 @@ export interface GeneratedDocument {
   sections: GenerationSection[];
   createdAt: string;
   updatedAt: string;
+  /** URL de téléchargement pré-signée (export DOCX automatique en fin de génération réussie) — absente tant qu'aucun export n'a réussi ou après une édition manuelle du contenu. */
+  exportUrl?: string;
 }
 
 export interface GenerationSection {
@@ -134,6 +149,9 @@ export interface GenerationSection {
   label: string;
   status: 'PENDING' | 'GENERATING' | 'DONE' | 'FAILED';
   content: string;
+  type?: StructureNodeType;
+  level?: number;
+  columns?: string[];
 }
 
 export type AiProvider =
@@ -142,7 +160,9 @@ export type AiProvider =
   | 'GEMINI'
   | 'MISTRAL'
   | 'OLLAMA'
-  | 'DEEPSEEK';
+  | 'DEEPSEEK'
+  | 'GROQ'
+  | 'QWEN';
 
 export interface AiModelConfig {
   id: string;

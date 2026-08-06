@@ -1,37 +1,24 @@
-// Mock API layer — PARTIELLEMENT MIGRÉE vers le vrai backend Spring Boot.
+// API client — intégralement branché sur le vrai backend Spring Boot.
 //
-// Périmètre réel (via lib/api/http.ts) à ce stade de l'intégration : auth
-// (login/refresh/logout/password), users (CRUD complet + reset mot de passe
-// admin), roles (lecture), catégories (CRUD complet, Bloc 3), document-types
-// (CRUD référentiel + structure, Bloc 3 ; import/ré-extraction/validation,
-// Bloc 4), upload/extraction bas niveau, notifications, audit logs,
+// Périmètre : auth (login/refresh/logout/password), users (CRUD complet +
+// reset mot de passe admin), roles (lecture), catégories (CRUD complet,
+// Bloc 3), document-types (CRUD référentiel + structure, Bloc 3 ;
+// import/ré-extraction/validation, Bloc 4), upload/extraction bas niveau,
 // conversations/messages/documents de référence + générations/streaming
-// (Bloc 6). Les fonctions encore mockées ci-dessous n'ont pas d'endpoint
-// backend correspondant (ai-configs, dashboard, export réel — Blocs 7/8) et
-// continuent de résoudre contre les fixtures en mémoire.
+// (Bloc 6), export DOCX/PDF/Markdown, dashboard et configurations IA
+// (Bloc 7/8), notifications, audit logs.
 //
-// Chaque fonction migrée garde exactement la même signature qu'avant, pour
-// que les hooks React Query et les composants qui les consomment n'aient pas
-// à changer — à l'exception d'addReferenceDocument, qui doit désormais
-// recevoir le fichier réel (File) et non plus seulement son nom, puisque le
-// vrai backend (contrairement au mock) a besoin du contenu pour l'uploader
-// et l'indexer (RAG).
+// Chaque fonction garde une signature stable pour que les hooks React Query
+// et les composants qui les consomment n'aient pas à changer.
 
 import { http, toApiError } from './http';
-import {
-  aiModelConfigs,
-  auditLogs,
-  categories,
-  documentTypes,
-  generatedDocuments,
-  notifications,
-} from './fixtures';
 import type {
   AiModelConfig,
   AuditLogEntry,
   AuthSession,
   Category,
   Conversation,
+  DashboardStats,
   DocumentStructure,
   DocumentType,
   GeneratedDocument,
@@ -41,18 +28,11 @@ import type {
   Notification,
   ReferenceDocument,
   Role,
+  SectionConstraints,
   StructureNode,
   User,
 } from '@/types';
 import type { ApiSuccess } from '@/types';
-
-const LATENCY_MIN = 280;
-const LATENCY_MAX = 750;
-
-function delay(): Promise<void> {
-  const ms = LATENCY_MIN + Math.random() * (LATENCY_MAX - LATENCY_MIN);
-  return new Promise((r) => setTimeout(r, ms));
-}
 
 function ok<T>(data: T, meta?: ApiSuccess<T>['meta']): ApiSuccess<T> {
   return { data, error: null, meta };
@@ -66,11 +46,6 @@ export class ApiError extends Error {
     this.code = code;
     this.path = path;
   }
-}
-
-async function guard<T>(fn: () => T | Promise<T>): Promise<ApiSuccess<T>> {
-  await delay();
-  return ok(await fn());
 }
 
 // ---------------------------------------------------------------------------
@@ -375,6 +350,8 @@ interface BackendStructureNodeDTO {
   label: string;
   children?: BackendStructureNodeDTO[] | null;
   columns?: string[] | null;
+  required?: boolean | null;
+  constraints?: SectionConstraints | null;
 }
 
 function adaptStructureNodeDTO(dto: BackendStructureNodeDTO): StructureNode {
@@ -385,6 +362,11 @@ function adaptStructureNodeDTO(dto: BackendStructureNodeDTO): StructureNode {
     label: dto.label,
     children: dto.children?.map(adaptStructureNodeDTO),
     columns: dto.columns ?? undefined,
+    // Non édités par l'UI actuelle (éditeur limité au renommage/ajout/suppression
+    // de sections) — repassés tels quels pour ne pas les perdre au premier
+    // enregistrement si un Document Type en a déjà (ex. défini via l'API).
+    required: dto.required ?? undefined,
+    constraints: dto.constraints ?? undefined,
   };
 }
 
@@ -585,10 +567,33 @@ export async function createConversation(input: { userId: string; documentTypeId
   }
 }
 
+/**
+ * Historique complet d'une conversation. L'endpoint backend est paginé
+ * (ordre chronologique ascendant, page 0 = les plus anciens — voir
+ * ConversationController#listMessages) alors que l'UI actuelle affiche tout
+ * l'historique d'un bloc, sans pagination visuelle : on reconstitue donc la
+ * liste complète ici en enchaînant les pages, plutôt que de se limiter à la
+ * première (ce qui masquerait silencieusement les messages les plus récents
+ * dès qu'une conversation dépasse une page).
+ */
 export async function listMessages(conversationId: string): Promise<ApiSuccess<Message[]>> {
   try {
-    const res = await http.get<{ data: BackendMessageDTO[] }>(`/conversations/${conversationId}/messages`);
-    return ok(res.data.data.map(adaptMessageDTO));
+    const pageSize = 200;
+    const all: BackendMessageDTO[] = [];
+    let page = 0;
+    for (;;) {
+      const res = await http.get<{ data: BackendMessageDTO[]; meta?: { totalPages?: number } }>(
+        `/conversations/${conversationId}/messages`,
+        { params: { page, size: pageSize } },
+      );
+      all.push(...res.data.data);
+      const totalPages = res.data.meta?.totalPages ?? 1;
+      page += 1;
+      if (page >= totalPages || res.data.data.length === 0) {
+        break;
+      }
+    }
+    return ok(all.map(adaptMessageDTO));
   } catch (e) {
     throw toApiError(e, `/api/v1/conversations/${conversationId}/messages`);
   }
@@ -673,6 +678,7 @@ interface BackendGeneratedDocumentDTO {
   sections?: BackendGenerationSectionDTO[] | null;
   createdAt: string;
   updatedAt?: string | null;
+  exportUrl?: string | null;
 }
 
 function adaptGeneratedDocumentDTO(dto: BackendGeneratedDocumentDTO): GeneratedDocument {
@@ -696,6 +702,7 @@ function adaptGeneratedDocumentDTO(dto: BackendGeneratedDocumentDTO): GeneratedD
     // après sa création — repli sur createdAt pour respecter le type
     // non-optionnel côté frontend.
     updatedAt: dto.updatedAt ?? dto.createdAt,
+    exportUrl: dto.exportUrl ?? undefined,
   };
 }
 
@@ -749,61 +756,38 @@ export async function updateGeneration(id: string, patch: Partial<GeneratedDocum
 }
 
 // ---------------------------------------------------------------------------
-// AI configs
+// AI configs — branché sur /api/v1/ai-configs (Bloc 8).
 // ---------------------------------------------------------------------------
 
 export async function listAiConfigs(): Promise<ApiSuccess<AiModelConfig[]>> {
-  return guard(() => [...aiModelConfigs]);
+  try {
+    const res = await http.get<{ data: AiModelConfig[] }>('/ai-configs');
+    return ok(res.data.data);
+  } catch (e) {
+    throw toApiError(e, '/api/v1/ai-configs');
+  }
 }
 
 export async function updateAiConfig(id: string, patch: Partial<AiModelConfig>): Promise<ApiSuccess<AiModelConfig>> {
-  return guard(() => {
-    const idx = aiModelConfigs.findIndex((a) => a.id === id);
-    if (idx < 0) throw new ApiError('AI_CONFIG_NOT_FOUND', 'Configuration IA introuvable.', `/api/v1/ai-configs/${id}`);
-    if (patch.isDefault) {
-      aiModelConfigs.forEach((a) => (a.isDefault = false));
-    }
-    aiModelConfigs[idx] = { ...aiModelConfigs[idx], ...patch, id };
-    return aiModelConfigs[idx];
-  });
+  try {
+    const res = await http.patch<{ data: AiModelConfig }>(`/ai-configs/${id}`, patch);
+    return ok(res.data.data);
+  } catch (e) {
+    throw toApiError(e, `/api/v1/ai-configs/${id}`);
+  }
 }
 
 // ---------------------------------------------------------------------------
-// Dashboard stats
+// Dashboard stats — branché sur /api/v1/dashboard/stats (Bloc 8).
 // ---------------------------------------------------------------------------
 
-export async function getDashboardStats(userId: string): Promise<ApiSuccess<import('@/types').DashboardStats>> {
-  return guard(() => {
-    const userDocs = generatedDocuments.filter((g) => g.userId === userId);
-    const docsThisMonth = userDocs.filter((g) => new Date(g.createdAt).getMonth() === new Date().getMonth()).length;
-    const successCount = userDocs.filter((g) => !['ECHEC'].includes(g.status)).length;
-    const byCategoryMap = new Map<string, number>();
-    userDocs.forEach((g) => {
-      const dt = documentTypes.find((d) => d.id === g.documentTypeId);
-      const cat = categories.find((c) => c.id === dt?.categoryId);
-      const key = cat?.id ?? 'none';
-      byCategoryMap.set(key, (byCategoryMap.get(key) ?? 0) + 1);
-    });
-    const byCategory = Array.from(byCategoryMap.entries()).map(([categoryId, count]) => {
-      const cat = categories.find((c) => c.id === categoryId);
-      return { categoryId, categoryName: cat?.name ?? 'Autres', count };
-    });
-    const last7Days = Array.from({ length: 7 }).map((_, i) => {
-      const d = new Date();
-      d.setDate(d.getDate() - (6 - i));
-      const iso = d.toISOString().slice(0, 10);
-      const count = userDocs.filter((g) => g.createdAt.slice(0, 10) === iso).length;
-      return { date: iso, count };
-    });
-    return {
-      documentsThisMonth: docsThisMonth,
-      averageGenerationTimeSec: 47,
-      activeDocumentTypes: documentTypes.filter((d) => d.status === 'ACTIF').length,
-      successRate: userDocs.length ? Math.round((successCount / userDocs.length) * 100) : 100,
-      byCategory,
-      last7Days,
-    };
-  });
+export async function getDashboardStats(userId: string): Promise<ApiSuccess<DashboardStats>> {
+  try {
+    const res = await http.get<{ data: DashboardStats }>('/dashboard/stats', { params: { userId } });
+    return ok(res.data.data);
+  } catch (e) {
+    throw toApiError(e, '/api/v1/dashboard/stats');
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -948,11 +932,23 @@ const EXPORT_FORMAT_MAP: Record<ExportFormat, 'DOCX' | 'PDF' | 'MARKDOWN'> = {
   Markdown: 'MARKDOWN',
 };
 
-export async function exportDocument(input: { title: string; content: string; format: ExportFormat }): Promise<Blob> {
+export async function exportDocument(input: {
+  title: string;
+  content: string;
+  format: ExportFormat;
+  headerText?: string;
+  footerText?: string;
+}): Promise<Blob> {
   try {
     const res = await http.post(
       '/export',
-      { title: input.title, content: input.content, format: EXPORT_FORMAT_MAP[input.format] },
+      {
+        title: input.title,
+        content: input.content,
+        format: EXPORT_FORMAT_MAP[input.format],
+        headerText: input.headerText,
+        footerText: input.footerText,
+      },
       { responseType: 'blob' },
     );
     return res.data as Blob;

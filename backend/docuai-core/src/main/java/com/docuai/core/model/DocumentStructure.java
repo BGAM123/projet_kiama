@@ -47,4 +47,16 @@ public class DocumentStructure {
     @Column(name = "possede_toc", nullable = false)
     @Builder.Default
     private Boolean possedeToc = false;
+
+    /**
+     * En-tête/pied de page extraits du fichier source (DOCX uniquement) —
+     * texte statique répété tel quel sur chaque page à l'export (Bloc 7),
+     * jamais passé au fournisseur IA (Bloc 6, contrairement à
+     * {@code arbreJson} qui, lui, sert de structure attendue au prompt).
+     */
+    @Column(name = "header_text", columnDefinition = "text")
+    private String headerText;
+
+    @Column(name = "footer_text", columnDefinition = "text")
+    private String footerText;
 }

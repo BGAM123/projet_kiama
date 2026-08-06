@@ -195,22 +195,24 @@ export default function StructurePreviewPage() {
         <Card>
           <CardContent className="p-4">
             <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-muted-foreground">Arborescence structurelle</h2>
-            <ul className="space-y-1">
-              {tree.map((node) => (
-                <TreeRow
-                  key={node.id}
-                  node={node}
-                  depth={0}
-                  editingId={editingId}
-                  draftLabel={draftLabel}
-                  onEdit={startEdit}
-                  onDraft={setDraftLabel}
-                  onCommit={commitEdit}
-                  onRemove={(id) => setTree(removeNode(id))}
-                  onAddChild={addChild}
-                />
-              ))}
-            </ul>
+            <div className="max-h-[65vh] overflow-y-auto pr-1">
+              <ul className="space-y-1">
+                {tree.map((node) => (
+                  <TreeRow
+                    key={node.id}
+                    node={node}
+                    depth={0}
+                    editingId={editingId}
+                    draftLabel={draftLabel}
+                    onEdit={startEdit}
+                    onDraft={setDraftLabel}
+                    onCommit={commitEdit}
+                    onRemove={(id) => setTree(removeNode(id))}
+                    onAddChild={addChild}
+                  />
+                ))}
+              </ul>
+            </div>
             <Button variant="outline" size="sm" className="mt-3 w-full border-dashed" onClick={() => addChild(null)}>
               <Plus className="mr-2 h-4 w-4" /> Ajouter une section
             </Button>
@@ -221,7 +223,7 @@ export default function StructurePreviewPage() {
         <Card className="bg-muted/20">
           <CardContent className="p-6">
             <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-muted-foreground">Aperçu visuel</h2>
-            <div className="rounded-lg border border-border bg-background p-6 shadow-sm">
+            <div className="max-h-[65vh] overflow-y-auto rounded-lg border border-border bg-background p-6 shadow-sm">
               {/* Cover */}
               {tree.find((n) => n.type === 'cover') && (
                 <div className="mb-6 rounded-md bg-primary/5 px-4 py-8 text-center">

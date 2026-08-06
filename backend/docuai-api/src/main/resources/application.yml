@@ -50,6 +50,11 @@ server:
   error:
     include-message: always
     include-binding-errors: always
+  servlet:
+    encoding:
+      charset: UTF-8
+      enabled: true
+      force: true
 
 management:
   endpoints:
@@ -114,6 +119,10 @@ docuai:
       api-key: ${MISTRAL_API_KEY:}
     deepseek:
       api-key: ${DEEPSEEK_API_KEY:}
+    groq:
+      api-key: ${GROQ_API_KEY:}
+    qwen:
+      api-key: ${QWEN_API_KEY:}
   upload:
     max-size-mb: 25
     allowed-mime-types:
@@ -129,6 +138,9 @@ docuai:
   generation:
     max-reference-documents: 10
     section-retry-attempts: 2
+  conversation:
+    keep-last-messages: 10
+    summary-batch-size: 6
 
 resilience4j:
   retry:

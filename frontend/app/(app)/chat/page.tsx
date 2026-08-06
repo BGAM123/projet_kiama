@@ -8,13 +8,19 @@ import {
   Bot,
   ChevronDown,
   ChevronRight,
+  Cpu,
+  Download,
   FileDown,
   FileText,
+  Globe,
   List,
   Loader2,
   MessageSquare,
+  PanelRightClose,
+  PanelRightOpen,
   Pencil,
   Plus,
+  Search,
   Send,
   Sparkles,
   Table2,
@@ -25,6 +31,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Separator } from '@/components/ui/separator';
 import { Progress } from '@/components/ui/progress';
@@ -33,6 +40,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
@@ -43,6 +51,8 @@ import {
   useRefDocuments,
   useDocumentTypes,
   useStructure,
+  useGenerations,
+  useAiConfigs,
 } from '@/lib/hooks/queries';
 import {
   createConversation,
@@ -56,6 +66,7 @@ import {
 import { streamGeneration, getStructureFor } from '@/lib/api/generator';
 import { languageLabel, toneLabel, targetLengthLabel, relativeTime } from '@/lib/format';
 import type {
+  AiModelConfig,
   Conversation,
   DocumentType,
   GeneratedDocument,
@@ -83,12 +94,15 @@ export default function GenerateDocumentPage() {
   const qc = useQueryClient();
   const { data: conversations, isLoading: convLoading } = useConversations();
   const { data: documentTypes } = useDocumentTypes();
+  const { data: allGenerations } = useGenerations();
+  const { data: aiConfigs } = useAiConfigs();
 
   const [activeId, setActiveId] = useState<string | null>(null);
   const [documentTypeId, setDocumentTypeId] = useState<string>('');
   const [language, setLanguage] = useState<Language>('FR');
   const [tone, setTone] = useState<Tone>('FORMEL');
   const [targetLength, setTargetLength] = useState<TargetLength>('LONG');
+  const [aiConfigId, setAiConfigId] = useState<string>('');
   const [contentPivot, setContentPivot] = useState('');
   const [input, setInput] = useState('');
   const [generating, setGenerating] = useState(false);
@@ -96,7 +110,9 @@ export default function GenerateDocumentPage() {
   const [currentSection, setCurrentSection] = useState<string | null>(null);
   const [activeGen, setActiveGen] = useState<GeneratedDocument | null>(null);
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
-  const [showSettings, setShowSettings] = useState(true);
+  const [showStructure, setShowStructure] = useState(true);
+  const [rightPanelOpen, setRightPanelOpen] = useState(true);
+  const [conversationSearch, setConversationSearch] = useState('');
   const [exporting, setExporting] = useState<string | null>(null);
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>(null);
   const chatFileRef = useRef<HTMLInputElement>(null);
@@ -113,7 +129,50 @@ export default function GenerateDocumentPage() {
   const { data: structure } = useStructure(activeDocTypeId || null);
   const structureTree: StructureNode[] = structure?.tree ?? [];
 
+  // Dernière génération connue pour la conversation active : repli sur
+  // l'historique serveur (useGenerations) quand aucune génération n'a été
+  // lancée pendant cette session — permet d'afficher l'aperçu du document
+  // en rouvrant une conversation déjà générée, sans re-générer.
+  const conversationGen: GeneratedDocument | null =
+    activeGen ??
+    (allGenerations ?? [])
+      .filter((g: GeneratedDocument) => g.conversationId === activeId)
+      .sort((a: GeneratedDocument, b: GeneratedDocument) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())[0] ??
+    null;
+
+  const activeAiConfigs = (aiConfigs ?? []).filter((c: AiModelConfig) => c.active);
+  const selectedAiConfig =
+    activeAiConfigs.find((c: AiModelConfig) => c.id === aiConfigId) ??
+    activeAiConfigs.find((c: AiModelConfig) => c.isDefault) ??
+    activeAiConfigs[0];
+
+  function conversationDateGroup(iso: string): string {
+    const now = new Date();
+    const d = new Date(iso);
+    const startOfDay = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    const dayDiff = Math.floor((startOfDay(now).getTime() - startOfDay(d).getTime()) / 86400000);
+    if (dayDiff <= 0) return "Aujourd'hui";
+    if (dayDiff <= 7) return 'Cette semaine';
+    if (dayDiff <= 30) return 'Ce mois';
+    return 'Plus ancien';
+  }
+
+  const groupOrder = ["Aujourd'hui", 'Cette semaine', 'Ce mois', 'Plus ancien'];
+  const filteredConvList = convList.filter((c) =>
+    c.title.toLowerCase().includes(conversationSearch.trim().toLowerCase()),
+  );
+  const conversationGroups = groupOrder
+    .map((label) => ({
+      label,
+      items: filteredConvList.filter((c) => conversationDateGroup(c.createdAt) === label),
+    }))
+    .filter((g) => g.items.length > 0);
+
   const liveSections = activeGen?.sections ?? [];
+  // Contenu de la section en cours de génération, accumulé fragment par
+  // fragment via les événements SSE `delta` (cf. lib/api/generator.ts) —
+  // affiché en direct pendant que le texte s'écrit, comme chez Claude.
+  const liveSectionContent = liveSections.find((s) => s.status === 'GENERATING')?.content || '';
 
   useEffect(() => {
     if (!activeId && convList.length) setActiveId(convList[0].id);
@@ -121,7 +180,10 @@ export default function GenerateDocumentPage() {
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    // activeGen dans les dépendances : suit aussi le défilement pendant la
+    // génération en direct (le contenu de la section en cours s'allonge à
+    // chaque `delta`), pas seulement à l'arrivée d'un nouveau message.
+  }, [messages, activeGen]);
 
   useEffect(() => {
     if (structureTree.length) {
@@ -212,6 +274,11 @@ export default function GenerateDocumentPage() {
       })).data;
       setActiveGen(doc);
       const total = doc.sections.length;
+      // GENERATION_IN_PROGRESS (verrou Redis, cf. GenerationLockService) : le flux
+      // se termine juste après cet événement, sans `done` — on le signale
+      // explicitement plutôt que de laisser la boucle finir en silence, ce qui
+      // afficherait ensuite un toast "Document généré" trompeur.
+      let conflict = false;
       for await (const evt of streamGeneration(doc, (patch) => {
         setActiveGen((prev) => (prev ? { ...prev, ...patch } : prev));
       })) {
@@ -222,6 +289,11 @@ export default function GenerateDocumentPage() {
           setGenProgress(Math.round(((evt.sectionIndex ?? 0 + 1) / Math.max(total, 1)) * 100));
         } else if (evt.type === 'done') {
           setGenProgress(100);
+        } else if (evt.type === 'error') {
+          conflict = true;
+          toast.error('Génération interrompue', {
+            description: evt.message ?? 'Une génération est déjà en cours pour ce document.',
+          });
         }
       }
       // Le statut final (GENERE, ou ECHEC si une section a échoué) est déjà
@@ -231,10 +303,18 @@ export default function GenerateDocumentPage() {
       const finalDoc = (await getGeneration(doc.id)).data;
       setActiveGen(finalDoc);
       qc.invalidateQueries({ queryKey: ['generation', doc.id] });
-      if (finalDoc?.status === 'ECHEC') {
-        toast.error('La génération a échoué pour une ou plusieurs sections.');
+      if (conflict) {
+        // Toast déjà affiché ci-dessus ; on a seulement resynchronisé l'état réel du document, rien de nouveau à ouvrir.
+      } else if (finalDoc?.status === 'ECHEC') {
+        toast.error('La génération a échoué pour une ou plusieurs sections.', {
+          description: 'Le contenu déjà généré reste disponible dans l\'éditeur.',
+        });
+        router.push(`/editor/${doc.id}`);
       } else {
         toast.success('Document généré', { description: 'Vous pouvez l\'éditer ou l\'exporter.' });
+        // Bascule directe vers l'éditeur (plutôt qu'un clic manuel sur "Éditer") :
+        // c'est là que le contenu généré peut être corrigé puis exporté en DOCX/PDF/Markdown.
+        router.push(`/editor/${doc.id}`);
       }
     } catch (e) {
       toast.error('La génération a échoué.', { description: e instanceof Error ? e.message : undefined });
@@ -246,25 +326,27 @@ export default function GenerateDocumentPage() {
   }
 
   async function handleExport(format: 'DOCX' | 'PDF' | 'Markdown') {
-    if (!activeGen) return;
+    if (!conversationGen) return;
     setExporting(format);
     try {
       // Export réel via POST /api/v1/export — remplace la simulation locale
       // qui téléchargeait du texte brut renommé en .pdf/.docx (écart 1.13
       // du rapport d'écarts). Le backend renvoie un vrai binaire.
       const blob = await exportDocument({
-        title: activeGen.contentPivot || 'document',
-        content: activeGen.content || '',
+        title: conversationGen.contentPivot || 'document',
+        content: conversationGen.content || '',
         format,
+        headerText: structure?.headerText,
+        footerText: structure?.footerText,
       });
       const ext = format === 'Markdown' ? 'md' : format.toLowerCase();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${activeGen.contentPivot ?? 'document'}.${ext}`;
+      a.download = `${conversationGen.contentPivot ?? 'document'}.${ext}`;
       a.click();
       URL.revokeObjectURL(url);
-      await updateGeneration(activeGen.id, { status: 'EXPORTE' });
+      await updateGeneration(conversationGen.id, { status: 'EXPORTE' });
       toast.success(`Export ${format} terminé`, { description: 'Le fichier a été téléchargé.' });
     } catch (e) {
       toast.error(`L'export ${format} a échoué`, { description: e instanceof Error ? e.message : undefined });
@@ -290,7 +372,7 @@ export default function GenerateDocumentPage() {
   }
 
   const docTypeName = documentTypes?.find((d: DocumentType) => d.id === activeDocTypeId)?.name;
-  const hasGeneratedDoc = !!activeGen && !generating;
+  const hasGeneratedDoc = !!conversationGen && !generating;
 
   /* ---------------- Conversations panel (shared) ---------------- */
   const ConversationsPanel = (
@@ -301,36 +383,60 @@ export default function GenerateDocumentPage() {
           <X className="h-4 w-4" />
         </Button>
       </div>
-      <div className="p-3">
+      <div className="space-y-2 p-3">
         <Button className="w-full bg-accent text-accent-foreground hover:bg-accent/90" onClick={() => createConv.mutate()} disabled={createConv.isPending}>
           <Plus className="mr-2 h-4 w-4" /> Nouvelle conversation
         </Button>
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={conversationSearch}
+            onChange={(e) => setConversationSearch(e.target.value)}
+            placeholder="Rechercher…"
+            aria-label="Rechercher une conversation"
+            className="h-9 pl-8 text-sm"
+          />
+        </div>
       </div>
       <ScrollArea className="flex-1">
-        <ul className="space-y-1 p-2">
+        <div className="space-y-4 p-2 pb-4">
           {convLoading ? (
-            <li className="p-3 text-sm text-muted-foreground">Chargement…</li>
-          ) : !convList.length ? (
-            <li className="p-3 text-sm text-muted-foreground">Aucune conversation.</li>
+            <p className="p-3 text-sm text-muted-foreground">Chargement…</p>
+          ) : !filteredConvList.length ? (
+            <p className="p-3 text-sm text-muted-foreground">
+              {conversationSearch ? 'Aucun résultat.' : 'Aucune conversation.'}
+            </p>
           ) : (
-            convList.map((c: Conversation) => (
-              <li key={c.id}>
-                <button
-                  onClick={() => { setActiveId(c.id); setMobilePanel(null); }}
-                  className={cn(
-                    'w-full rounded-md px-3 py-2 text-left text-sm transition-colors',
-                    activeId === c.id ? 'bg-primary text-primary-foreground' : 'hover:bg-muted',
-                  )}
-                >
-                  <p className="truncate font-medium">{c.title}</p>
-                  <p className={cn('truncate text-xs', activeId === c.id ? 'text-primary-foreground/70' : 'text-muted-foreground')}>
-                    {relativeTime(c.createdAt)}
-                  </p>
-                </button>
-              </li>
+            conversationGroups.map((group) => (
+              <div key={group.label}>
+                <p className="px-2 pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  {group.label}
+                </p>
+                <ul className="space-y-1">
+                  {group.items.map((c: Conversation) => {
+                    const dtName = documentTypes?.find((d: DocumentType) => d.id === c.documentTypeId)?.name;
+                    return (
+                      <li key={c.id}>
+                        <button
+                          onClick={() => { setActiveId(c.id); setMobilePanel(null); }}
+                          className={cn(
+                            'w-full rounded-md px-3 py-2 text-left text-sm transition-colors',
+                            activeId === c.id ? 'bg-primary text-primary-foreground' : 'hover:bg-muted',
+                          )}
+                        >
+                          <p className="truncate font-medium">{c.title}</p>
+                          <p className={cn('truncate text-xs', activeId === c.id ? 'text-primary-foreground/70' : 'text-muted-foreground')}>
+                            {dtName ? `${dtName} · ${relativeTime(c.createdAt)}` : relativeTime(c.createdAt)}
+                          </p>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
             ))
           )}
-        </ul>
+        </div>
       </ScrollArea>
     </div>
   );
@@ -338,127 +444,139 @@ export default function GenerateDocumentPage() {
   /* ---------------- Settings panel (shared) ---------------- */
   const SettingsPanel = (
     <div className="flex h-full flex-col bg-card">
-      <div className="flex items-center justify-between p-4 lg:hidden">
+      <div className="flex items-center justify-between border-b border-border p-4 lg:hidden">
         <span className="text-sm font-semibold">Paramètres & sections</span>
         <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Fermer" onClick={() => setMobilePanel(null)}>
           <X className="h-4 w-4" />
         </Button>
       </div>
-
-      {/* Document sections */}
-      <div className="border-b border-border p-4">
-        <h3 className="flex items-center gap-2 text-sm font-semibold">
-          <FileText className="h-4 w-4 text-primary" />
-          Sections du document
-        </h3>
-        <p className="mt-1 text-xs text-muted-foreground">{docTypeName ?? 'Sélectionnez un Document Type'}</p>
-        {!structureTree.length ? (
-          <p className="mt-4 rounded-md bg-muted/40 px-3 py-4 text-center text-xs text-muted-foreground">
-            Aucune structure à afficher. Choisissez un Document Type dans les paramètres ci-dessous.
-          </p>
-        ) : (
-          <ScrollArea className="mt-3 max-h-72">
-            <ul className="space-y-0.5">
-              {structureTree.map((node) => (
-                <SectionRow
-                  key={node.id}
-                  node={node}
-                  depth={0}
-                  expandedNodes={expandedNodes}
-                  onToggle={toggleNode}
-                  sectionStatus={sectionStatus}
-                  generating={generating}
-                  currentSection={currentSection}
-                />
-              ))}
-            </ul>
-          </ScrollArea>
-        )}
+      <div className="hidden items-center justify-between border-b border-border p-4 lg:flex">
+        <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Paramètres</span>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7 text-muted-foreground hover:text-foreground"
+          aria-label="Réduire le panneau"
+          onClick={() => setRightPanelOpen(false)}
+        >
+          <PanelRightClose className="h-4 w-4" />
+        </Button>
       </div>
 
-      {/* Settings (collapsible) */}
       <div className="flex-1 overflow-y-auto p-4">
-        <button
-          className="flex w-full items-center justify-between text-sm font-semibold"
-          onClick={() => setShowSettings((s) => !s)}
-          aria-expanded={showSettings}
-        >
-          <span className="flex items-center gap-2"><Sparkles className="h-4 w-4 text-accent" /> Paramètres de génération</span>
-          {showSettings ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
-        </button>
+        <div className="space-y-5">
+          <div className="space-y-2">
+            <Label htmlFor="dt" className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Document Type</Label>
+            <Select value={documentTypeId} onValueChange={setDocumentTypeId}>
+              <SelectTrigger id="dt"><SelectValue placeholder="Sélectionner" /></SelectTrigger>
+              <SelectContent>
+                {documentTypes?.filter((d: DocumentType) => d.status === 'ACTIF').map((d: DocumentType) => <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <button
+              type="button"
+              className="flex items-center gap-1 text-xs font-medium text-accent hover:underline disabled:cursor-not-allowed disabled:text-muted-foreground disabled:no-underline"
+              onClick={() => setShowStructure((s) => !s)}
+              disabled={!structureTree.length}
+              aria-expanded={showStructure}
+            >
+              {showStructure ? 'Masquer la structure' : 'Voir la structure'}
+              {showStructure ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+            </button>
+            {showStructure && (
+              !structureTree.length ? (
+                <p className="rounded-md bg-muted/40 px-3 py-4 text-center text-xs text-muted-foreground">
+                  Aucune structure à afficher. Choisissez un Document Type.
+                </p>
+              ) : (
+                <ScrollArea className="max-h-64 rounded-md border border-border/60">
+                  <ul className="space-y-0.5 p-1.5">
+                    {structureTree.map((node) => (
+                      <SectionRow
+                        key={node.id}
+                        node={node}
+                        depth={0}
+                        expandedNodes={expandedNodes}
+                        onToggle={toggleNode}
+                        sectionStatus={sectionStatus}
+                        generating={generating}
+                        currentSection={currentSection}
+                      />
+                    ))}
+                  </ul>
+                </ScrollArea>
+              )
+            )}
+          </div>
 
-        {showSettings && (
-          <div className="mt-4 space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="dt">Document Type</Label>
-              <Select value={documentTypeId} onValueChange={setDocumentTypeId}>
-                <SelectTrigger id="dt"><SelectValue placeholder="Sélectionner" /></SelectTrigger>
-                <SelectContent>
-                  {documentTypes?.filter((d: DocumentType) => d.status === 'ACTIF').map((d: DocumentType) => <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
+          <div className="space-y-2">
+            <Label htmlFor="pivot" className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Sujet / pivot de contenu</Label>
+            <Input id="pivot" placeholder="Ex. Rapport Q2 2026" value={contentPivot} onChange={(e) => setContentPivot(e.target.value)} />
+          </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-2">
-                <Label htmlFor="lang">Langue</Label>
-                <Select value={language} onValueChange={(v) => setLanguage(v as Language)}>
-                  <SelectTrigger id="lang"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {Object.entries(languageLabel).map(([k, v]) => <SelectItem key={k} value={k}>{v}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="tone">Ton</Label>
-                <Select value={tone} onValueChange={(v) => setTone(v as Tone)}>
-                  <SelectTrigger id="tone"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {Object.entries(toneLabel).map(([k, v]) => <SelectItem key={k} value={k}>{v}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
+          <div className="space-y-2">
+            <Label htmlFor="lang" className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Langue</Label>
+            <Select value={language} onValueChange={(v) => setLanguage(v as Language)}>
+              <SelectTrigger id="lang"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {Object.entries(languageLabel).map(([k, v]) => <SelectItem key={k} value={k}>{v}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="len">Longueur cible</Label>
-              <Select value={targetLength} onValueChange={(v) => setTargetLength(v as TargetLength)}>
-                <SelectTrigger id="len"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {Object.entries(targetLengthLabel).map(([k, v]) => <SelectItem key={k} value={k}>{v}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="pivot">Sujet / pivot de contenu</Label>
-              <Input id="pivot" placeholder="Ex. Rapport Q2 2026" value={contentPivot} onChange={(e) => setContentPivot(e.target.value)} />
-            </div>
-
-            <Separator />
-
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label>Documents de référence</Label>
-                <span className="text-xs text-muted-foreground">{refDocs?.length ?? 0}/10</span>
-              </div>
-              <input ref={settingsFileRef} type="file" multiple className="hidden" accept=".doc,.docx,.pdf,.md,.txt,.xlsx,.xls,.csv" onChange={(e) => handleFiles(e.target.files)} />
-              <Button variant="outline" size="sm" className="w-full border-dashed" onClick={() => settingsFileRef.current?.click()} disabled={!activeId}>
-                <Plus className="mr-2 h-4 w-4" /> Importer des fichiers
-              </Button>
-              {refDocs?.length ? (
-                <ul className="space-y-1">
-                  {refDocs.map((r: ReferenceDocument) => (
-                    <li key={r.id} className="flex items-center gap-2 rounded-md bg-muted/50 px-2 py-1.5 text-xs">
-                      <FileText className="h-3 w-3 flex-none text-muted-foreground" />
-                      <span className="truncate">{r.fileName}</span>
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
+          <div className="space-y-2">
+            <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Ton</Label>
+            <div className="flex flex-wrap gap-2">
+              {Object.entries(toneLabel).map(([k, v]) => (
+                <SegButton key={k} active={tone === k} onClick={() => setTone(k as Tone)}>{v}</SegButton>
+              ))}
             </div>
           </div>
-        )}
+
+          <div className="space-y-2">
+            <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Longueur cible</Label>
+            <div className="flex flex-col gap-2">
+              {Object.entries(targetLengthLabel).map(([k, v]) => (
+                <SegButton key={k} active={targetLength === k} onClick={() => setTargetLength(k as TargetLength)} full>{v}</SegButton>
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="model" className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Modèle IA</Label>
+            <Select value={selectedAiConfig?.id ?? ''} onValueChange={setAiConfigId}>
+              <SelectTrigger id="model"><SelectValue placeholder="Modèle par défaut" /></SelectTrigger>
+              <SelectContent>
+                {activeAiConfigs.map((c: AiModelConfig) => (
+                  <SelectItem key={c.id} value={c.id}>{c.modelName}{c.isDefault ? ' (Défaut)' : ''}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <Separator />
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Documents de référence</Label>
+              <span className="text-xs text-muted-foreground">{refDocs?.length ?? 0}/10</span>
+            </div>
+            <input ref={settingsFileRef} type="file" multiple className="hidden" accept=".doc,.docx,.pdf,.md,.txt,.xlsx,.xls,.csv" onChange={(e) => handleFiles(e.target.files)} />
+            <Button variant="outline" size="sm" className="w-full border-dashed" onClick={() => settingsFileRef.current?.click()} disabled={!activeId}>
+              <Plus className="mr-2 h-4 w-4" /> Importer des fichiers
+            </Button>
+            {refDocs?.length ? (
+              <ul className="space-y-1">
+                {refDocs.map((r: ReferenceDocument) => (
+                  <li key={r.id} className="flex items-center gap-2 rounded-md bg-muted/50 px-2 py-1.5 text-xs">
+                    <FileText className="h-3 w-3 flex-none text-muted-foreground" />
+                    <span className="truncate">{r.fileName}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
+        </div>
       </div>
 
       {/* Bottom actions */}
@@ -466,9 +584,9 @@ export default function GenerateDocumentPage() {
         <Button onClick={handleGenerate} disabled={generating} className="w-full bg-accent text-accent-foreground hover:bg-accent/90">
           {generating ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Génération…</> : <><Sparkles className="mr-2 h-4 w-4" /> Générer le document</>}
         </Button>
-        {hasGeneratedDoc && (
+        {hasGeneratedDoc && conversationGen && (
           <div className="mt-2 grid grid-cols-2 gap-2">
-            <Button variant="outline" size="sm" onClick={() => router.push(`/editor/${activeGen.id}`)}>
+            <Button variant="outline" size="sm" onClick={() => router.push(`/editor/${conversationGen.id}`)}>
               <Pencil className="mr-1.5 h-3.5 w-3.5" /> Éditer
             </Button>
             <DropdownMenu>
@@ -479,6 +597,16 @@ export default function GenerateDocumentPage() {
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="w-full">
+                {conversationGen.exportUrl && (
+                  <>
+                    <DropdownMenuItem asChild>
+                      <a href={conversationGen.exportUrl} target="_blank" rel="noopener noreferrer">
+                        <Download className="mr-2 h-4 w-4" /> Télécharger (Word)
+                      </a>
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                  </>
+                )}
                 <DropdownMenuItem onClick={() => handleExport('DOCX')}><FileDown className="mr-2 h-4 w-4" /> DOCX</DropdownMenuItem>
                 <DropdownMenuItem onClick={() => handleExport('PDF')}><FileDown className="mr-2 h-4 w-4" /> PDF</DropdownMenuItem>
                 <DropdownMenuItem onClick={() => handleExport('Markdown')}><FileDown className="mr-2 h-4 w-4" /> Markdown</DropdownMenuItem>
@@ -487,6 +615,20 @@ export default function GenerateDocumentPage() {
           </div>
         )}
       </div>
+    </div>
+  );
+
+  const CollapsedSettingsRail = (
+    <div className="hidden flex-col items-center border-l border-border bg-card py-4 lg:flex">
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-8 w-8 text-muted-foreground hover:text-foreground"
+        aria-label="Afficher les paramètres"
+        onClick={() => setRightPanelOpen(true)}
+      >
+        <PanelRightOpen className="h-4 w-4" />
+      </Button>
     </div>
   );
 
@@ -533,7 +675,10 @@ export default function GenerateDocumentPage() {
         </div>
       )}
 
-      <div className="grid flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[260px_1fr_320px]">
+      <div className={cn(
+        'grid flex-1 grid-cols-1 overflow-hidden',
+        rightPanelOpen ? 'lg:grid-cols-[260px_1fr_320px]' : 'lg:grid-cols-[260px_1fr_52px]',
+      )}>
         {/* Desktop conversations list */}
         <aside className="hidden flex-col border-r border-border bg-card lg:flex">
           {ConversationsPanel}
@@ -541,20 +686,30 @@ export default function GenerateDocumentPage() {
 
         {/* Chat area */}
         <section className="flex flex-col overflow-hidden">
-          <header className="flex items-center justify-between border-b border-border bg-card px-4 py-3">
+          <header className="flex items-center justify-between gap-3 border-b border-border bg-card px-4 py-3">
             <div className="min-w-0">
               <h2 className="truncate text-sm font-semibold">{activeConv?.title ?? 'Générer un document'}</h2>
-              <p className="truncate text-xs text-muted-foreground">{docTypeName ?? 'Aucun Document Type sélectionné'}</p>
+              <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                <Badge variant="outline" className="gap-1 font-normal text-muted-foreground">
+                  <FileText className="h-3 w-3" /> {docTypeName ?? 'Aucun Document Type'}
+                </Badge>
+                <Badge variant="outline" className="gap-1 font-normal text-muted-foreground">
+                  <Globe className="h-3 w-3" /> {languageLabel[language]}
+                </Badge>
+                <Badge variant="outline" className="gap-1 font-normal text-muted-foreground">
+                  <Cpu className="h-3 w-3" /> {selectedAiConfig?.modelName ?? 'Modèle par défaut'}
+                </Badge>
+              </div>
             </div>
             <div className="flex flex-none items-center gap-2">
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => activeGen && router.push(`/editor/${activeGen.id}`)}
+                onClick={() => conversationGen && router.push(`/editor/${conversationGen.id}`)}
                 disabled={!hasGeneratedDoc}
                 title={hasGeneratedDoc ? 'Ouvrir dans l\'éditeur' : 'Générez un document d\'abord'}
               >
-                <Pencil className="mr-1.5 h-3.5 w-3.5" /> <span className="hidden sm:inline">Éditer</span>
+                <Pencil className="mr-1.5 h-3.5 w-3.5" /> <span className="hidden sm:inline">Ouvrir dans l'éditeur</span>
               </Button>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -564,51 +719,38 @@ export default function GenerateDocumentPage() {
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
+                  {conversationGen?.exportUrl && (
+                    <>
+                      <DropdownMenuItem asChild>
+                        <a href={conversationGen.exportUrl} target="_blank" rel="noopener noreferrer">
+                          <Download className="mr-2 h-4 w-4" /> Télécharger (Word)
+                        </a>
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                    </>
+                  )}
                   <DropdownMenuItem onClick={() => handleExport('DOCX')}><FileDown className="mr-2 h-4 w-4" /> DOCX (Word)</DropdownMenuItem>
                   <DropdownMenuItem onClick={() => handleExport('PDF')}><FileDown className="mr-2 h-4 w-4" /> PDF</DropdownMenuItem>
                   <DropdownMenuItem onClick={() => handleExport('Markdown')}><FileDown className="mr-2 h-4 w-4" /> Markdown</DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
+              {!rightPanelOpen && (
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="hidden lg:inline-flex"
+                  aria-label="Afficher les paramètres"
+                  onClick={() => setRightPanelOpen(true)}
+                >
+                  <PanelRightOpen className="h-4 w-4" />
+                </Button>
+              )}
             </div>
           </header>
 
           <ScrollArea className="flex-1 scrollbar-thin">
-            <div className="mx-auto max-w-3xl space-y-4 p-4 sm:p-6">
-              {!messages?.length ? (
-                <div className="flex flex-col items-center gap-3 py-10 text-center sm:py-16">
-                  <div className="flex h-14 w-14 items-center justify-center rounded-full bg-primary/10 text-primary">
-                    <Bot className="h-7 w-7" />
-                  </div>
-                  <h3 className="text-lg font-semibold">Générer un document</h3>
-                  <p className="max-w-md text-sm text-muted-foreground">
-                    Décrivez le document que vous souhaitez générer, importez des fichiers de référence avec le bouton <Plus className="inline h-3 w-3" />, puis cliquez sur « Générer le document ».
-                  </p>
-                </div>
-              ) : (
-                messages.map((m: Message) => (
-                  <div key={m.id} className={cn('flex gap-3 animate-fade-in-up', m.role === 'user' && 'flex-row-reverse')}>
-                    <div className={cn('flex h-8 w-8 flex-none items-center justify-center rounded-full', m.role === 'user' ? 'bg-accent text-accent-foreground' : 'bg-primary text-primary-foreground')}>
-                      {m.role === 'user' ? <UserIcon className="h-4 w-4" /> : <Bot className="h-4 w-4" />}
-                    </div>
-                    <div className={cn('max-w-[80%] rounded-lg px-4 py-2.5 text-sm', m.role === 'user' ? 'bg-accent/15 text-foreground' : 'bg-muted text-foreground')}>
-                      <p className="whitespace-pre-wrap leading-relaxed">{m.content}</p>
-                    </div>
-                  </div>
-                ))
-              )}
-
-              {refDocs?.length ? (
-                <div className="flex flex-wrap gap-2">
-                  {refDocs.map((r: ReferenceDocument) => (
-                    <span key={r.id} className="inline-flex items-center gap-1.5 rounded-md border border-border bg-muted/50 px-2.5 py-1 text-xs">
-                      <FileText className="h-3 w-3 text-muted-foreground" />
-                      {r.fileName}
-                    </span>
-                  ))}
-                </div>
-              ) : null}
-
-              {generating && (
+            {generating ? (
+              <div className="mx-auto max-w-3xl space-y-4 p-4 sm:p-6">
                 <div className="rounded-lg border border-accent/30 bg-accent/5 p-4">
                   <div className="mb-2 flex items-center gap-2 text-sm font-medium">
                     <Loader2 className="h-4 w-4 animate-spin text-accent" />
@@ -619,9 +761,69 @@ export default function GenerateDocumentPage() {
                     Section {Math.round((genProgress / 100) * (activeGen?.sections.length ?? 1))}/{activeGen?.sections.length ?? 0} : {currentSection}
                   </p>
                 </div>
-              )}
-              <div ref={messagesEndRef} />
-            </div>
+                {activeGen?.content && (
+                  <div className="rounded-lg border border-border bg-background p-6 sm:p-8">
+                    <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground/90">{activeGen.content}</p>
+                  </div>
+                )}
+                {liveSectionContent && (
+                  <div className="rounded-md border border-border/60 bg-background/70 p-4">
+                    <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground/90">
+                      {liveSectionContent}
+                      <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-accent align-text-bottom" />
+                    </p>
+                  </div>
+                )}
+                <div ref={messagesEndRef} />
+              </div>
+            ) : conversationGen ? (
+              <div className="mx-auto max-w-3xl space-y-4 p-4 sm:p-6">
+                <div className="rounded-lg border border-border bg-background p-6 sm:p-10">
+                  <div
+                    className="space-y-3 [&_h1]:text-2xl [&_h1]:font-semibold [&_h1]:mt-6 [&_h1]:first:mt-0 [&_h2]:text-lg [&_h2]:font-semibold [&_h2]:mt-4 [&_p]:leading-relaxed [&_table]:w-full [&_table]:border-collapse [&_th]:border [&_th]:border-border [&_th]:bg-muted [&_th]:px-3 [&_th]:py-1.5 [&_td]:border [&_td]:border-border [&_td]:px-3 [&_td]:py-1.5 [&_ul]:list-disc [&_ul]:pl-6 [&_ol]:list-decimal [&_ol]:pl-6"
+                    dangerouslySetInnerHTML={{ __html: conversationGen.content || '<p class="text-muted-foreground">Document vide.</p>' }}
+                  />
+                </div>
+                <div ref={messagesEndRef} />
+              </div>
+            ) : (
+              <div className="mx-auto max-w-3xl space-y-4 p-4 sm:p-6">
+                {!messages?.length ? (
+                  <div className="flex flex-col items-center gap-3 py-10 text-center sm:py-16">
+                    <div className="flex h-14 w-14 items-center justify-center rounded-full bg-primary/10 text-primary">
+                      <Bot className="h-7 w-7" />
+                    </div>
+                    <h3 className="text-lg font-semibold">Générer un document</h3>
+                    <p className="max-w-md text-sm text-muted-foreground">
+                      Décrivez le document que vous souhaitez générer, importez des fichiers de référence avec le bouton <Plus className="inline h-3 w-3" />, puis cliquez sur « Générer le document ».
+                    </p>
+                  </div>
+                ) : (
+                  messages.map((m: Message) => (
+                    <div key={m.id} className={cn('flex gap-3 animate-fade-in-up', m.role === 'user' && 'flex-row-reverse')}>
+                      <div className={cn('flex h-8 w-8 flex-none items-center justify-center rounded-full', m.role === 'user' ? 'bg-accent text-accent-foreground' : 'bg-primary text-primary-foreground')}>
+                        {m.role === 'user' ? <UserIcon className="h-4 w-4" /> : <Bot className="h-4 w-4" />}
+                      </div>
+                      <div className={cn('max-w-[80%] rounded-lg px-4 py-2.5 text-sm', m.role === 'user' ? 'bg-accent/15 text-foreground' : 'bg-muted text-foreground')}>
+                        <p className="whitespace-pre-wrap leading-relaxed">{m.content}</p>
+                      </div>
+                    </div>
+                  ))
+                )}
+
+                {refDocs?.length ? (
+                  <div className="flex flex-wrap gap-2">
+                    {refDocs.map((r: ReferenceDocument) => (
+                      <span key={r.id} className="inline-flex items-center gap-1.5 rounded-md border border-border bg-muted/50 px-2.5 py-1 text-xs">
+                        <FileText className="h-3 w-3 text-muted-foreground" />
+                        {r.fileName}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+                <div ref={messagesEndRef} />
+              </div>
+            )}
           </ScrollArea>
 
           {/* Input bar */}
@@ -642,12 +844,18 @@ export default function GenerateDocumentPage() {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
-                placeholder="Écrivez votre message… (Entrée pour envoyer)"
+                placeholder="Décrivez le document à générer… (Entrée pour envoyer, Maj+Entrée pour un retour à la ligne)"
                 rows={1}
                 aria-label="Saisie du message"
                 className="flex-1 resize-none rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               />
-              <Button onClick={handleSend} disabled={!input.trim() || sendMsg.isPending} aria-label="Envoyer">
+              <Button
+                onClick={handleSend}
+                disabled={!input.trim() || sendMsg.isPending}
+                aria-label="Envoyer"
+                size="icon"
+                className="flex-none rounded-full bg-accent text-accent-foreground hover:bg-accent/90"
+              >
                 <Send className="h-4 w-4" />
               </Button>
             </div>
@@ -655,11 +863,42 @@ export default function GenerateDocumentPage() {
         </section>
 
         {/* Desktop right panel */}
-        <aside className="hidden flex-col overflow-hidden border-l border-border bg-card scrollbar-thin lg:flex">
-          {SettingsPanel}
-        </aside>
+        {rightPanelOpen ? (
+          <aside className="hidden flex-col overflow-hidden border-l border-border bg-card scrollbar-thin lg:flex">
+            {SettingsPanel}
+          </aside>
+        ) : (
+          CollapsedSettingsRail
+        )}
       </div>
     </div>
+  );
+}
+
+function SegButton({
+  active,
+  onClick,
+  full,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  full?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={cn(
+        'rounded-md border px-3 py-1.5 text-sm font-medium transition-colors',
+        full && 'w-full text-left',
+        active ? 'border-accent bg-accent/10 text-accent' : 'border-border text-foreground hover:bg-muted',
+      )}
+    >
+      {children}
+    </button>
   );
 }
 

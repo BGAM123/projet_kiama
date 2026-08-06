@@ -15,4 +15,6 @@ public class StructureNodeDTO {
     private String label;
     private List<StructureNodeDTO> children;
     private List<String> columns;
+    private Boolean required;
+    private SectionConstraintsDTO constraints;
 }

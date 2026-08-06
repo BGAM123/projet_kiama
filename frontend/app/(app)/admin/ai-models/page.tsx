@@ -26,6 +26,8 @@ const providerColor: Record<AiProvider, string> = {
   MISTRAL: 'bg-rose-500/15 text-rose-600 dark:text-rose-400',
   OLLAMA: 'bg-slate-500/15 text-slate-600 dark:text-slate-300',
   DEEPSEEK: 'bg-indigo-500/15 text-indigo-600 dark:text-indigo-400',
+  GROQ: 'bg-amber-500/15 text-amber-600 dark:text-amber-400',
+  QWEN: 'bg-fuchsia-500/15 text-fuchsia-600 dark:text-fuchsia-400',
 };
 
 export default function AdminAiModelsPage() {

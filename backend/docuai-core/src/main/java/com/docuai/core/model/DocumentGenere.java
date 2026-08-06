@@ -86,6 +86,13 @@ public class DocumentGenere {
     @Builder.Default
     private List<GenerationSectionNode> sections = new ArrayList<>();
 
+    /** Clé de l'objet MinIO (bucket-exports) produit par l'export automatique en fin de génération réussie — voir V6__add_document_genere_export.sql. */
+    @Column(name = "minio_object_key", length = 500)
+    private String minioObjectKey;
+
+    @Column(name = "export_format", length = 10)
+    private String exportFormat;
+
     @Column(name = "date_creation", nullable = false, updatable = false)
     @Builder.Default
     private LocalDateTime dateCreation = LocalDateTime.now();

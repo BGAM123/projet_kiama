@@ -8,6 +8,8 @@ import com.docuai.ai.exception.AiProviderException;
 import com.docuai.ai.port.AiProviderPort;
 import com.docuai.core.model.AiModelConfig;
 import com.docuai.core.repository.AiModelConfigRepository;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import io.github.resilience4j.retry.annotation.Retry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -36,16 +38,82 @@ public class GenerationOrchestrator {
         this.aiModelConfigRepository = aiModelConfigRepository;
     }
 
+    /**
+     * Câblage Resilience4j réel (instances {@code ai-provider} de
+     * application.yml, jusque-là orphelines) : appelée depuis des beans
+     * externes (ConversationService, GenerationStreamService), donc à travers
+     * le proxy Spring AOP — pas d'auto-invocation, {@code @Retry}/
+     * {@code @CircuitBreaker} s'appliquent normalement. Le repli de config
+     * ({@link #resolveConfig}) est englobé par le retry par simplicité : son
+     * coût (throw immédiat, pas d'appel réseau) rend les tentatives
+     * supplémentaires inoffensives même si elles n'apportent rien pour une
+     * erreur de configuration non transitoire.
+     * <p>
+     * {@code fallbackMethod} n'est déclaré QUE sur {@code @Retry} (aspect le
+     * plus externe, {@code @Retry} encapsule {@code @CircuitBreaker} par
+     * défaut) : le mettre aussi sur {@code @CircuitBreaker} déclenche un
+     * repli à chaque échec brut de l'adaptateur (pas seulement circuit
+     * ouvert), ce qui masque en réalité les tentatives de retry réussies
+     * derrière un faux "échec définitif" et double l'emballage d'exception —
+     * confirmé empiriquement par {@code GenerationOrchestratorResilienceTest}
+     * (log de repli déclenché dès la 1ère tentative malgré un succès en 2e).
+     */
+    @Retry(name = "ai-provider", fallbackMethod = "generateFallback")
+    @CircuitBreaker(name = "ai-provider")
     public GenerationResult generate(GenerationRequest request) {
         ResolvedConfig resolved = resolveConfig(request.getProvider());
         AiProviderPort adapter = providerFactory.resolve(resolved.provider());
         return adapter.generate(withResolvedConfig(request, resolved));
     }
 
+    /**
+     * Repli propre après épuisement des tentatives ({@code ai-provider.retry})
+     * ou circuit ouvert ({@code ai-provider.circuitbreaker}, exception
+     * {@code CallNotPermittedException} — pas une {@link AiProviderException},
+     * d'où la signature en {@link Exception}). Convertie en {@link AiProviderException}
+     * pour rester dans le contrat déjà géré par les appelants (catch existant
+     * dans ConversationService/GenerationStreamService) et déjà mappée en 503
+     * par GlobalExceptionHandler — jamais de 500 nu.
+     */
+    private GenerationResult generateFallback(GenerationRequest request, Exception ex) {
+        log.error("Appel IA en échec définitif (après retries ou circuit ouvert) : {}", ex.getMessage());
+        throw new AiProviderException("Le service IA est momentanément indisponible après plusieurs tentatives. Réessayez plus tard.", ex);
+    }
+
+    /**
+     * Même câblage Resilience4j que {@link #generate}, en variante réactive
+     * ({@code resilience4j-reactor}, déjà en dépendance) : les aspects
+     * {@code @Retry}/{@code @CircuitBreaker} détectent un type de retour
+     * {@code Publisher} et enveloppent le {@link Flux} renvoyé avec les
+     * opérateurs réactifs correspondants plutôt que d'appliquer une boucle
+     * bloquante — chaque échec signalé sur le canal d'erreur du flux (panne
+     * réseau pendant le streaming SSE côté fournisseur, cf.
+     * {@code AbstractOpenAiStyleAdapter#streamGenerate}) déclenche une
+     * re-souscription, exactement comme un appel bloquant raté redéclenche
+     * une tentative.
+     * <p>
+     * Limite assumée : {@link #resolveConfig} s'exécute de façon synchrone
+     * AVANT la construction du {@code Flux} (contrairement à l'appel HTTP
+     * réactif lui-même, différé jusqu'à la souscription) — une exception levée
+     * à ce stade (config IA absente/inconnue) échappe donc à l'enveloppe
+     * réactive de Resilience4j (rien à ré-essayer, pas encore de Publisher) et
+     * remonte directement à l'appelant. Sans conséquence pratique : c'est le
+     * même type d'erreur non transitoire que le repli de {@link #generate}
+     * traite déjà sans bénéfice réel du retry, et {@link GenerationStreamService}
+     * catch {@link AiProviderException} quel que soit le chemin.
+     */
+    @Retry(name = "ai-provider", fallbackMethod = "streamGenerateFallback")
+    @CircuitBreaker(name = "ai-provider")
     public Flux<Chunk> streamGenerate(GenerationRequest request) {
         ResolvedConfig resolved = resolveConfig(request.getProvider());
         AiProviderPort adapter = providerFactory.resolve(resolved.provider());
         return adapter.streamGenerate(withResolvedConfig(request, resolved));
+    }
+
+    /** Repli réactif — mêmes raisons qu'en {@link #generateFallback}, propagé via le canal d'erreur du Flux plutôt que par exception directe. */
+    private Flux<Chunk> streamGenerateFallback(GenerationRequest request, Exception ex) {
+        log.error("Flux IA en échec définitif (après retries ou circuit ouvert) : {}", ex.getMessage());
+        return Flux.error(new AiProviderException("Le service IA est momentanément indisponible après plusieurs tentatives. Réessayez plus tard.", ex));
     }
 
     private ResolvedConfig resolveConfig(String explicitProvider) {

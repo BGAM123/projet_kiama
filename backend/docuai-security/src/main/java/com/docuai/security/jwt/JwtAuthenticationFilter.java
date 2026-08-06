@@ -29,6 +29,22 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         this.userDetailsService = userDetailsService;
     }
 
+    /**
+     * {@code OncePerRequestFilter} ignore les dispatches ASYNC par défaut —
+     * cassant pour {@code GET /generations/{id}/stream} (Bloc 6, SseEmitter) :
+     * quand l'émetteur se termine ({@code emitter.complete()}/
+     * {@code completeWithError()}), Tomcat redéclenche un dispatch ASYNC pour
+     * finaliser la réponse, ce filtre étant sauté sur ce second passage, le
+     * {@code SecurityContext} redevient vide et {@code AuthorizationFilter}
+     * refuse l'accès (le stream ayant déjà commencé, la réponse est trop
+     * avancée pour transformer ce refus en 401/403 propre — la connexion est
+     * simplement coupée, perçue côté navigateur comme une "network error").
+     */
+    @Override
+    protected boolean shouldNotFilterAsyncDispatch() {
+        return false;
+    }
+
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
