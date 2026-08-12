@@ -30,6 +30,8 @@ public class DocxDocumentExporter implements DocumentExporter {
     private static final String CONTENT_TYPE =
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
     private static final int[] HEADING_FONT_SIZE = {20, 16, 14, 13, 12, 11};
+    /** En twips (1/20 de point) — ~0,6 cm par niveau d'imbrication. */
+    private static final int LIST_INDENT_PER_LEVEL = 360;
 
     @Override
     public ExportFormat supportedFormat() {
@@ -53,7 +55,11 @@ public class DocxDocumentExporter implements DocumentExporter {
                 } else if (block instanceof MarkdownContentParser.TableBlock table) {
                     writeTable(document, table);
                 } else if (block instanceof MarkdownContentParser.ParagraphBlock paragraph) {
-                    document.createParagraph().createRun().setText(paragraph.text());
+                    writeSegments(document.createParagraph(), paragraph.text());
+                } else if (block instanceof MarkdownContentParser.ListBlock list) {
+                    writeList(document, list);
+                } else if (block instanceof MarkdownContentParser.RuleBlock) {
+                    writeHorizontalRule(document);
                 }
             }
 
@@ -82,6 +88,54 @@ public class DocxDocumentExporter implements DocumentExporter {
         run.setFontSize(HEADING_FONT_SIZE[level - 1]);
     }
 
+    /**
+     * Un run Word par fragment de mise en forme — c'est ce qui évite que le
+     * {@code **gras**} saisi dans l'éditeur ressorte en astérisques littérales
+     * dans le document exporté. Les liens sont rendus en bleu souligné plutôt
+     * qu'en vrai champ HYPERLINK : l'apparence attendue sans la plomberie de
+     * relations OOXML.
+     */
+    private void writeSegments(XWPFParagraph paragraph, String text) {
+        writeSegments(paragraph, text, false);
+    }
+
+    private void writeSegments(XWPFParagraph paragraph, String text, boolean forceBold) {
+        for (MarkdownContentParser.Segment segment : MarkdownContentParser.inline(text)) {
+            XWPFRun run = paragraph.createRun();
+            run.setText(segment.text());
+            run.setBold(forceBold || segment.bold());
+            run.setItalic(segment.italic());
+            if (segment.code()) {
+                run.setFontFamily("Consolas");
+            }
+            if (segment.href() != null) {
+                run.setUnderline(org.apache.poi.xwpf.usermodel.UnderlinePatterns.SINGLE);
+                run.setColor("1155CC");
+            }
+        }
+    }
+
+    /**
+     * Puces et numéros écrits en texte, avec un retrait proportionnel au
+     * niveau : un XWPFDocument vierge n'embarque pas de numbering.xml, et en
+     * créer un pour trois niveaux de liste coûterait plus qu'il ne rapporte.
+     */
+    private void writeList(XWPFDocument document, MarkdownContentParser.ListBlock list) {
+        int counter = 0;
+        for (MarkdownContentParser.ListItem item : list.items()) {
+            counter++;
+            XWPFParagraph paragraph = document.createParagraph();
+            paragraph.setIndentationLeft(LIST_INDENT_PER_LEVEL * (item.depth() + 1));
+            paragraph.createRun().setText(list.ordered() ? counter + ". " : "• ");
+            writeSegments(paragraph, item.text());
+        }
+    }
+
+    private void writeHorizontalRule(XWPFDocument document) {
+        XWPFParagraph paragraph = document.createParagraph();
+        paragraph.setBorderBottom(org.apache.poi.xwpf.usermodel.Borders.SINGLE);
+    }
+
     private void writeTable(XWPFDocument document, MarkdownContentParser.TableBlock tableBlock) {
         List<List<String>> rows = tableBlock.rows();
         if (rows.isEmpty()) {
@@ -98,9 +152,7 @@ public class DocxDocumentExporter implements DocumentExporter {
                 XWPFTableCell cell = table.getRow(r).getCell(c);
                 cell.removeParagraph(0);
                 XWPFParagraph cellParagraph = cell.addParagraph();
-                XWPFRun cellRun = cellParagraph.createRun();
-                cellRun.setText(c < row.size() ? row.get(c) : "");
-                cellRun.setBold(r == 0);
+                writeSegments(cellParagraph, c < row.size() ? row.get(c) : "", r == 0);
             }
         }
     }

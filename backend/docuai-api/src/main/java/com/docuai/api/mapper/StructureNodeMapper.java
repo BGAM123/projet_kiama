@@ -2,8 +2,10 @@ package com.docuai.api.mapper;
 
 import com.docuai.api.dto.SectionConstraintsDTO;
 import com.docuai.api.dto.StructureNodeDTO;
+import com.docuai.api.dto.TableColumnDefDTO;
 import com.docuai.core.model.SectionConstraints;
 import com.docuai.core.model.StructureNode;
+import com.docuai.core.model.TableColumnDef;
 import org.mapstruct.Mapper;
 
 import java.util.List;
@@ -29,4 +31,8 @@ public interface StructureNodeMapper {
     SectionConstraintsDTO toDto(SectionConstraints constraints);
 
     SectionConstraints toEntity(SectionConstraintsDTO dto);
+
+    TableColumnDefDTO toDto(TableColumnDef column);
+
+    TableColumnDef toEntity(TableColumnDefDTO dto);
 }

@@ -5,14 +5,14 @@ import Link from 'next/link';
 import { History, Search, FileText, Pencil } from 'lucide-react';
 import { PageHeader } from '@/components/page-header';
 import { Card, CardContent } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
-import { GeneratedStatusBadge } from '@/components/status-badge';
-import { useDocumentTypes, useCategories, useGenerations } from '@/lib/hooks/queries';
+import { DocumentStatusBadge } from '@/components/status-badge';
+import { useDocumentTypes, useCategories, useDocuments } from '@/lib/hooks/queries';
 import { formatDateTime } from '@/lib/format';
-import type { Category, DocumentType, GeneratedDocument } from '@/types';
+import type { AppDocument, Category, DocumentType } from '@/types';
 
 export default function HistoryPage() {
   const { data: documentTypes } = useDocumentTypes();
@@ -21,31 +21,35 @@ export default function HistoryPage() {
   const [statusFilter, setStatusFilter] = useState('all');
   const [catFilter, setCatFilter] = useState('all');
 
-  // GET /api/v1/generations?userId= (Bloc 6) trie par date de création ;
-  // on retrie ici par date de mise à jour, plus pertinent pour un historique
-  // (un document édité récemment doit remonter même si créé plus tôt).
-  const { data: docs, isLoading } = useGenerations();
-  const docsList: GeneratedDocument[] = useMemo(
-    () => [...(docs ?? [])].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
+  // GET /api/v1/documents?userId= trie par date de création ; on retrie ici
+  // par date de mise à jour, plus pertinent pour un historique (un document
+  // édité récemment doit remonter même si créé plus tôt).
+  const { data: docs, isLoading } = useDocuments();
+  const docsList: AppDocument[] = useMemo(
+    () => [...(docs ?? [])].sort((a, b) => (b.updatedAt ?? b.createdAt).localeCompare(a.updatedAt ?? a.createdAt)),
     [docs],
   );
 
   const filtered = useMemo(() => {
     return docsList
-      .filter((g: GeneratedDocument) => (statusFilter === 'all' ? true : g.status === statusFilter))
-      .filter((g: GeneratedDocument) => {
+      .filter((d: AppDocument) => (statusFilter === 'all' ? true : d.status === statusFilter))
+      .filter((d: AppDocument) => {
         if (catFilter === 'all') return true;
-        const dt = documentTypes?.find((d: DocumentType) => d.id === g.documentTypeId);
+        const dt = documentTypes?.find((t: DocumentType) => t.id === d.documentTypeId);
         return dt?.categoryId === catFilter;
       })
-      .filter((g: GeneratedDocument) => (search.trim() ? g.contentPivot.toLowerCase().includes(search.toLowerCase()) : true));
+      .filter((d: AppDocument) => {
+        if (!search.trim()) return true;
+        const name = documentTypes?.find((t: DocumentType) => t.id === d.documentTypeId)?.name ?? '';
+        return name.toLowerCase().includes(search.toLowerCase());
+      });
   }, [docsList, statusFilter, catFilter, search, documentTypes]);
 
   const docTypeName = (id: string) => documentTypes?.find((d: DocumentType) => d.id === id)?.name ?? '—';
 
   return (
     <div className="mx-auto max-w-7xl space-y-6 p-6 lg:p-8">
-      <PageHeader title="Historique" description="Toutes vos conversations et documents générés." icon={History} />
+      <PageHeader title="Historique" description="Tous vos documents." icon={History} />
 
       <Card>
         <CardContent className="flex flex-col gap-3 p-4 lg:flex-row lg:items-center">
@@ -64,7 +68,7 @@ export default function HistoryPage() {
             <SelectTrigger className="w-full lg:w-44" aria-label="Statut"><SelectValue placeholder="Statut" /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">Tous statuts</SelectItem>
-              {Object.entries({ BROUILLON: 'Brouillon', EN_GENERATION: 'En génération', GENERE: 'Généré', ECHEC: 'Échec', EN_EDITION: 'En édition', EXPORTE: 'Exporté', ARCHIVE: 'Archivé' }).map(([k, v]) => <SelectItem key={k} value={k}>{v}</SelectItem>)}
+              {Object.entries({ BROUILLON: 'Brouillon', FINALISE: 'Finalisé', ARCHIVE: 'Archivé' }).map(([k, v]) => <SelectItem key={k} value={k}>{v}</SelectItem>)}
             </SelectContent>
           </Select>
         </CardContent>
@@ -81,22 +85,20 @@ export default function HistoryPage() {
             </div>
           ) : (
             <ul className="divide-y divide-border">
-              {filtered.map((g: GeneratedDocument) => (
-                <li key={g.id} className="flex items-center justify-between gap-4 p-4 transition-colors hover:bg-muted/30">
+              {filtered.map((d: AppDocument) => (
+                <li key={d.id} className="flex items-center justify-between gap-4 p-4 transition-colors hover:bg-muted/30">
                   <div className="flex min-w-0 items-center gap-3">
                     <div className="flex h-10 w-10 flex-none items-center justify-center rounded-md bg-primary/10 text-primary">
                       <FileText className="h-5 w-5" />
                     </div>
                     <div className="min-w-0">
-                      <p className="truncate font-medium">{g.contentPivot}</p>
-                      <p className="truncate text-xs text-muted-foreground">{docTypeName(g.documentTypeId)} · {formatDateTime(g.updatedAt)}</p>
+                      <p className="truncate font-medium">{docTypeName(d.documentTypeId)}</p>
+                      <p className="truncate text-xs text-muted-foreground">{formatDateTime(d.updatedAt ?? d.createdAt)}</p>
                     </div>
                   </div>
                   <div className="flex flex-none items-center gap-3">
-                    <GeneratedStatusBadge status={g.status} />
-                    {(g.status === 'GENERE' || g.status === 'EN_EDITION' || g.status === 'EXPORTE') && (
-                      <Button asChild variant="ghost" size="sm"><Link href={`/editor/${g.id}`}><Pencil className="mr-1 h-3.5 w-3.5" /> Éditer</Link></Button>
-                    )}
+                    <DocumentStatusBadge status={d.status} />
+                    <Button asChild variant="ghost" size="sm"><Link href={`/documents/${d.id}`}><Pencil className="mr-1 h-3.5 w-3.5" /> Ouvrir</Link></Button>
                   </div>
                 </li>
               ))}

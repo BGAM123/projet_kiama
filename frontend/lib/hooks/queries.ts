@@ -6,8 +6,8 @@ import {
   listConversations,
   listDocumentTypes,
   listCategories,
-  getGeneration,
-  listGenerations,
+  getDocument,
+  listDocuments,
   getStructure,
   listUsers,
   listRoles,
@@ -20,13 +20,13 @@ import {
 import { useAuth } from '@/lib/auth-store';
 import type {
   AiModelConfig,
+  AppDocument,
   AuditLogEntry,
   Category,
   Conversation,
   DashboardStats,
   DocumentStructure,
   DocumentType,
-  GeneratedDocument,
   Message,
   Notification,
   ReferenceDocument,
@@ -66,19 +66,19 @@ export function useCategories() {
   });
 }
 
-export function useGeneration(id: string | null) {
-  return useQuery<GeneratedDocument>({
-    queryKey: ['generation', id],
-    queryFn: async () => (await getGeneration(id!)).data as GeneratedDocument,
+export function useDocument(id: string | null) {
+  return useQuery<AppDocument>({
+    queryKey: ['document', id],
+    queryFn: async () => (await getDocument(id!)).data as AppDocument,
     enabled: !!id,
   });
 }
 
-export function useGenerations() {
+export function useDocuments() {
   const session = useAuth((s) => s.session);
-  return useQuery<GeneratedDocument[]>({
-    queryKey: ['all-generations', session?.user.id],
-    queryFn: async () => (await listGenerations(session!.user.id)).data as GeneratedDocument[],
+  return useQuery<AppDocument[]>({
+    queryKey: ['documents', session?.user.id],
+    queryFn: async () => (await listDocuments(session!.user.id)).data as AppDocument[],
     enabled: !!session,
   });
 }

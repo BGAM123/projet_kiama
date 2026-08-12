@@ -3,9 +3,11 @@ package com.docuai.api.controller.documenttype;
 import com.docuai.api.dto.ApiResponse;
 import com.docuai.api.dto.DocumentStructureDTO;
 import com.docuai.api.dto.DocumentTypeDTO;
+import com.docuai.api.dto.GenerateDocumentTypeRequest;
 import com.docuai.api.dto.UpdateDocumentTypeRequest;
 import com.docuai.api.dto.UpdateStructureRequest;
 import com.docuai.api.service.DocumentTypeExtractionService;
+import com.docuai.api.service.DocumentTypeGenerationService;
 import com.docuai.api.service.DocumentTypeService;
 import com.docuai.core.model.DocumentTypeStatut;
 import com.docuai.security.service.UserDetailsImpl;
@@ -35,11 +37,14 @@ public class DocumentTypeController {
 
     private final DocumentTypeService documentTypeService;
     private final DocumentTypeExtractionService documentTypeExtractionService;
+    private final DocumentTypeGenerationService documentTypeGenerationService;
 
     public DocumentTypeController(DocumentTypeService documentTypeService,
-                                   DocumentTypeExtractionService documentTypeExtractionService) {
+                                   DocumentTypeExtractionService documentTypeExtractionService,
+                                   DocumentTypeGenerationService documentTypeGenerationService) {
         this.documentTypeService = documentTypeService;
         this.documentTypeExtractionService = documentTypeExtractionService;
+        this.documentTypeGenerationService = documentTypeGenerationService;
     }
 
     @GetMapping
@@ -99,6 +104,16 @@ public class DocumentTypeController {
             @AuthenticationPrincipal UserDetailsImpl principal) {
         return ResponseEntity.ok(ApiResponse.success(
                 documentTypeExtractionService.importAndExtract(file, name, description, categoryId, principal.getUtilisateur())));
+    }
+
+    @PostMapping("/generate")
+    @PreAuthorize("hasAuthority('DOCUMENT_TYPE_IMPORT')")
+    @Operation(summary = "Générer le squelette d'un Document Type par IA à partir d'une description en langage naturel (titres/sous-titres/tableaux uniquement, aucun contenu rédigé)")
+    public ResponseEntity<ApiResponse<DocumentTypeDTO>> generate(
+            @Valid @RequestBody GenerateDocumentTypeRequest request,
+            @AuthenticationPrincipal UserDetailsImpl principal) {
+        return ResponseEntity.ok(ApiResponse.success(
+                documentTypeGenerationService.generate(request, principal.getUtilisateur())));
     }
 
     @PostMapping("/{id}/extract")

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Logs structurés JSON (net.logstash.logback, dépendance déjà présente
+    mais jusqu'ici jamais câblée — cf. note de migration). `traceId` (MDC,
+    voir TraceIdFilter) est inclus automatiquement dans chaque ligne,
+    permettant de corréler les logs d'une même requête, notamment le suivi
+    des suggestions IA acceptées/rejetées (DocumentSectionService).
+    `logging.level.*` (application.yml) continue de s'appliquer normalement
+    par-dessus cette configuration (mécanisme standard Spring Boot).
+-->
+<configuration>
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+            <includeMdcKeyName>traceId</includeMdcKeyName>
+        </encoder>
+    </appender>
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+    </root>
+</configuration>

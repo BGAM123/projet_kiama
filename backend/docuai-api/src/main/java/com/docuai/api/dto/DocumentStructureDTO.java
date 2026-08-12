@@ -16,4 +16,5 @@ public class DocumentStructureDTO {
     private Boolean hasToc;
     private String headerText;
     private String footerText;
+    private String source;
 }

@@ -59,4 +59,14 @@ public class DocumentStructure {
 
     @Column(name = "footer_text", columnDefinition = "text")
     private String footerText;
+
+    /**
+     * Origine de la structure : {@code IMPORTED} (extraction déterministe
+     * d'un fichier importé, comportement historique) ou {@code AI_GENERATED}
+     * (flux "décrire en texte -> squelette généré par IA"). Colonne ajoutée
+     * par V8__document_structure_ai_generation_source.sql.
+     */
+    @Column(name = "source", nullable = false, length = 20)
+    @Builder.Default
+    private String source = "IMPORTED";
 }

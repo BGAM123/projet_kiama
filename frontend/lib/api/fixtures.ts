@@ -5,7 +5,6 @@ import type {
   Conversation,
   DocumentStructure,
   DocumentType,
-  GeneratedDocument,
   Message,
   Notification,
   Permission,
@@ -215,38 +214,6 @@ export const referenceDocuments: ReferenceDocument[] = [
   { id: 'rd2', conversationId: 'cv2', fileName: 'besoins_acme.pdf', storagePath: '/refs/cv2/besoins_acme.pdf', importedAt: '2026-07-08T13:39:00Z' },
 ];
 
-export const generatedDocuments: GeneratedDocument[] = [
-  {
-    id: 'gd1', conversationId: 'cv1', documentTypeId: 'dt1', userId: 'u2', status: 'EXPORTE',
-    language: 'FR', tone: 'FORMEL', targetLength: 'LONG', contentPivot: 'Synthèse mensuelle juin 2026',
-    content: '', sections: [], createdAt: '2026-07-02T09:18:00Z', updatedAt: '2026-07-02T09:25:00Z',
-  },
-  {
-    id: 'gd2', conversationId: 'cv2', documentTypeId: 'dt2', userId: 'u2', status: 'GENERE',
-    language: 'FR', tone: 'PERSUASIF', targetLength: 'MOYEN', contentPivot: 'Proposition audit Acme',
-    content: '', sections: [], createdAt: '2026-07-08T13:42:00Z', updatedAt: '2026-07-08T13:48:00Z',
-  },
-  {
-    id: 'gd3', conversationId: 'cv3', documentTypeId: 'dt3', userId: 'u2', status: 'EN_EDITION',
-    language: 'FR', tone: 'INFORMATIF', targetLength: 'COURT', contentPivot: 'Compte rendu comité pilotage',
-    content: '', sections: [], createdAt: '2026-07-12T16:22:00Z', updatedAt: '2026-07-12T16:28:00Z',
-  },
-  {
-    id: 'gd4', conversationId: 'cv4', documentTypeId: 'dt1', userId: 'u1', status: 'ARCHIVE',
-    language: 'FR', tone: 'FORMEL', targetLength: 'LONG', contentPivot: 'Rapport mai 2026',
-    content: '', sections: [], createdAt: '2026-06-03T09:05:00Z', updatedAt: '2026-06-03T09:12:00Z',
-  },
-  {
-    id: 'gd5', conversationId: 'cv5', documentTypeId: 'dt2', userId: 'u3', status: 'BROUILLON',
-    language: 'FR', tone: 'PERSUASIF', targetLength: 'MOYEN', contentPivot: 'Proposition Globex',
-    content: '', sections: [], createdAt: '2026-07-15T11:32:00Z', updatedAt: '2026-07-15T11:32:00Z',
-  },
-  {
-    id: 'gd6', conversationId: 'cv6', documentTypeId: 'dt3', userId: 'u2', status: 'ECHEC',
-    language: 'FR', tone: 'NEUTRE', targetLength: 'COURT', contentPivot: 'CR équipe produit',
-    content: '', sections: [], createdAt: '2026-07-19T15:02:00Z', updatedAt: '2026-07-19T15:05:00Z',
-  },
-];
 
 export const aiModelConfigs: AiModelConfig[] = [
   { id: 'ai1', provider: 'OPENAI', modelName: 'gpt-4o', apiKeyRef: 'sk-••••••••••••a1f4', isDefault: true, active: true },

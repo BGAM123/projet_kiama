@@ -21,6 +21,7 @@ import {
   RefreshCw,
   Search,
   Settings2,
+  Sparkles,
   Trash2,
   Upload,
 } from 'lucide-react';
@@ -34,7 +35,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Skeleton } from '@/components/ui/skeleton';
 import { DocumentTypeStatusBadge } from '@/components/status-badge';
 import { useDocumentTypes, useCategories, useStructure } from '@/lib/hooks/queries';
-import { deleteDocumentType, reextractDocumentType, updateDocumentType } from '@/lib/api/client';
+import { deleteDocumentType, generateDocumentType, reextractDocumentType, updateDocumentType } from '@/lib/api/client';
 import { useAuth } from '@/lib/auth-store';
 import { formatDate } from '@/lib/format';
 import type { DocumentType, Category, StructureNode } from '@/types';
@@ -64,6 +65,7 @@ export default function DocumentTypesPage() {
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [preview, setPreview] = useState<DocumentType | null>(null);
   const [editing, setEditing] = useState<DocumentType | null>(null);
+  const [generating, setGenerating] = useState(false);
 
   const remove = useMutation({
     mutationFn: async (id: string) => (await deleteDocumentType(id)).data,
@@ -124,9 +126,14 @@ export default function DocumentTypesPage() {
         icon={Layers}
         actions={
           isAdmin && (
-            <Button asChild className="bg-accent text-accent-foreground hover:bg-accent/90">
-              <Link href="/documents-types/import"><Upload className="mr-2 h-4 w-4" /> Importer un document</Link>
-            </Button>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => setGenerating(true)}>
+                <Sparkles className="mr-2 h-4 w-4" /> Générer avec l&apos;IA
+              </Button>
+              <Button asChild className="bg-accent text-accent-foreground hover:bg-accent/90">
+                <Link href="/documents-types/import"><Upload className="mr-2 h-4 w-4" /> Importer un document</Link>
+              </Button>
+            </div>
           )
         }
       />
@@ -265,6 +272,7 @@ export default function DocumentTypesPage() {
 
       <StructurePreviewDialog documentType={preview} onClose={() => setPreview(null)} />
       <EditDocumentTypeDialog documentType={editing} categories={categories} onClose={() => setEditing(null)} />
+      <GenerateDocumentTypeDialog open={generating} categories={categories} onClose={() => setGenerating(false)} />
     </div>
   );
 }
@@ -352,6 +360,111 @@ function EditDocumentTypeDialog({
             <Button type="button" variant="outline" onClick={onClose}>Annuler</Button>
             <Button type="submit" disabled={editMutation.isPending} className="bg-accent text-accent-foreground hover:bg-accent/90">
               {editMutation.isPending ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Enregistrement…</> : 'Enregistrer'}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+const generateSchema = z.object({
+  name: z.string().min(1, 'Nom requis.'),
+  description: z.string().min(10, 'Décrivez le type de document souhaité (10 caractères minimum).'),
+  categoryId: z.string().min(1, 'Sélectionnez une catégorie.'),
+});
+
+type GenerateValues = z.infer<typeof generateSchema>;
+
+/**
+ * Flux "décrire en texte -> squelette généré par IA" (coexiste avec l'import
+ * de fichier) : pas d'upload, une description en langage naturel suffit. Le
+ * squelette produit (titres/sous-titres/tableaux, jamais de contenu rédigé)
+ * atterrit sur l'écran de structure existant pour relecture/correction avant
+ * validation, comme après un import de fichier.
+ */
+function GenerateDocumentTypeDialog({
+  open,
+  categories,
+  onClose,
+}: {
+  open: boolean;
+  categories: Category[] | undefined;
+  onClose: () => void;
+}) {
+  const router = useRouter();
+  const qc = useQueryClient();
+  const form = useForm<GenerateValues>({ resolver: zodResolver(generateSchema), defaultValues: { name: '', description: '', categoryId: '' } });
+  const [serverError, setServerError] = useState<string | null>(null);
+
+  const generateMutation = useMutation({
+    mutationFn: async (v: GenerateValues) => (await generateDocumentType(v)).data,
+    onSuccess: (dt) => {
+      qc.invalidateQueries({ queryKey: ['document-types'] });
+      if (dt.status === 'ECHEC_EXTRACTION') {
+        toast.error("L'IA n'a pas réussi à produire un squelette conforme après plusieurs tentatives.");
+      } else {
+        toast.success('Squelette généré — relisez-le avant de le valider.');
+      }
+      form.reset();
+      onClose();
+      router.push(`/documents-types/${dt.id}/structure`);
+    },
+    onError: (e: Error) => setServerError(e.message),
+  });
+
+  const onSubmit = form.handleSubmit((v) => {
+    setServerError(null);
+    generateMutation.mutate(v);
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) { onClose(); form.reset(); setServerError(null); } }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Sparkles className="h-5 w-5 text-primary" /> Générer avec l&apos;IA
+          </DialogTitle>
+          <DialogDescription>
+            Décrivez le type de document souhaité — l&apos;IA propose uniquement un squelette (titres, sous-titres, tableaux), sans aucun contenu rédigé.
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={onSubmit} className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="gdt-name">Nom</Label>
+            <Input id="gdt-name" placeholder="Rapport d'audit interne" {...form.register('name')} aria-invalid={!!form.formState.errors.name} />
+            {form.formState.errors.name && <p className="text-xs text-destructive">{form.formState.errors.name.message}</p>}
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="gdt-description">Description</Label>
+            <Textarea
+              id="gdt-description"
+              rows={5}
+              placeholder="Ex. Rapport d'audit interne avec introduction, méthodologie, constats par thème (sous forme de tableau), recommandations et conclusion."
+              {...form.register('description')}
+              aria-invalid={!!form.formState.errors.description}
+            />
+            {form.formState.errors.description && <p className="text-xs text-destructive">{form.formState.errors.description.message}</p>}
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="gdt-categoryId">Catégorie</Label>
+            <Select value={form.watch('categoryId')} onValueChange={(v) => form.setValue('categoryId', v, { shouldValidate: true })}>
+              <SelectTrigger id="gdt-categoryId" aria-label="Catégorie"><SelectValue placeholder="Sélectionnez une catégorie" /></SelectTrigger>
+              <SelectContent>
+                {categories?.map((c: Category) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            {form.formState.errors.categoryId && <p className="text-xs text-destructive">{form.formState.errors.categoryId.message}</p>}
+          </div>
+          {serverError && (
+            <div role="alert" className="flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              <AlertCircle className="h-4 w-4 flex-none" /> {serverError}
+            </div>
+          )}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={onClose}>Annuler</Button>
+            <Button type="submit" disabled={generateMutation.isPending} className="bg-accent text-accent-foreground hover:bg-accent/90">
+              {generateMutation.isPending ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Génération…</> : <><Sparkles className="mr-2 h-4 w-4" /> Générer le squelette</>}
             </Button>
           </DialogFooter>
         </form>

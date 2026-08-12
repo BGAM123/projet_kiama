@@ -14,15 +14,15 @@
 import { http, toApiError } from './http';
 import type {
   AiModelConfig,
+  AppDocument,
   AuditLogEntry,
   AuthSession,
   Category,
   Conversation,
   DashboardStats,
+  DocumentSection,
   DocumentStructure,
   DocumentType,
-  GeneratedDocument,
-  GenerationSection,
   LoginPayload,
   Message,
   Notification,
@@ -350,6 +350,8 @@ interface BackendStructureNodeDTO {
   label: string;
   children?: BackendStructureNodeDTO[] | null;
   columns?: string[] | null;
+  tableColumns?: { name: string; type?: string }[] | null;
+  suggestedRowCount?: number | null;
   required?: boolean | null;
   constraints?: SectionConstraints | null;
 }
@@ -362,6 +364,8 @@ function adaptStructureNodeDTO(dto: BackendStructureNodeDTO): StructureNode {
     label: dto.label,
     children: dto.children?.map(adaptStructureNodeDTO),
     columns: dto.columns ?? undefined,
+    tableColumns: dto.tableColumns ?? undefined,
+    suggestedRowCount: dto.suggestedRowCount ?? undefined,
     // Non édités par l'UI actuelle (éditeur limité au renommage/ajout/suppression
     // de sections) — repassés tels quels pour ne pas les perdre au premier
     // enregistrement si un Document Type en a déjà (ex. défini via l'API).
@@ -397,6 +401,7 @@ interface BackendDocumentStructureDTO {
   documentTypeId: string;
   tree: BackendStructureNodeDTO[];
   hasToc?: boolean | null;
+  source?: string | null;
 }
 
 function adaptDocumentStructureDTO(dto: BackendDocumentStructureDTO): DocumentStructure {
@@ -405,6 +410,7 @@ function adaptDocumentStructureDTO(dto: BackendDocumentStructureDTO): DocumentSt
     documentTypeId: dto.documentTypeId,
     tree: (dto.tree ?? []).map(adaptStructureNodeDTO),
     hasToc: dto.hasToc ?? false,
+    source: (dto.source as DocumentStructure['source']) ?? undefined,
   };
 }
 
@@ -475,6 +481,21 @@ export async function importDocumentType(input: { file: File; name: string; desc
     return ok(adaptDocumentTypeDTO(res.data.data));
   } catch (e) {
     throw toApiError(e, '/api/v1/document-types/import');
+  }
+}
+
+/**
+ * Flux "décrire en texte -> squelette généré par IA" : coexiste avec
+ * `importDocumentType` (import de fichier) — mêmes statuts en sortie
+ * (STRUCTURE_EXTRAITE, ou ECHEC_EXTRACTION si le LLM n'a pas produit un
+ * squelette conforme après ses tentatives de correction côté serveur).
+ */
+export async function generateDocumentType(input: { description: string; name: string; categoryId: string }): Promise<ApiSuccess<DocumentType>> {
+  try {
+    const res = await http.post<{ data: BackendDocumentTypeDTO }>('/document-types/generate', input);
+    return ok(adaptDocumentTypeDTO(res.data.data));
+  } catch (e) {
+    throw toApiError(e, '/api/v1/document-types/generate');
   }
 }
 
@@ -647,111 +668,165 @@ export async function listReferenceDocuments(conversationId: string): Promise<Ap
 }
 
 // ---------------------------------------------------------------------------
-// Generations — branché sur les vrais endpoints /generations du Bloc 6
-// (DOCUMENT_GENERATE / DOCUMENT_EDIT_OWN / HISTORY_READ_OWN|ALL, cf.
-// GenerationController). Le déroulement section par section se fait via le
-// flux SSE réel (lib/api/generator.ts#streamGeneration), pas ici.
+// Documents — édition manuelle assistée par section (branché sur les vrais
+// endpoints /documents du Bloc 2 de la refonte, cf. DocumentController).
+// Remplace l'ancien flux conversationnel de génération (/generations, SSE) :
+// création à partir d'un Document Type (sections vides initialisées depuis
+// son squelette), sauvegarde du contenu rédigé section par section,
+// amélioration/acceptation/rejet de suggestions IA, finalisation + export.
 // ---------------------------------------------------------------------------
 
-interface BackendGenerationSectionDTO {
+interface BackendDocumentSectionDTO {
   id: string;
+  parentSectionId?: string | null;
+  type: string;
+  level?: number | null;
   label: string;
+  tableColumns?: { name: string; type?: string }[] | null;
+  order: number;
+  userContent?: string | null;
+  aiSuggestedContent?: string | null;
+  confidenceScore?: number | null;
   status: string;
-  content: string;
 }
 
-function adaptGenerationSectionDTO(dto: BackendGenerationSectionDTO): GenerationSection {
-  return { id: dto.id, label: dto.label, status: dto.status as GenerationSection['status'], content: dto.content };
+function adaptDocumentSectionDTO(dto: BackendDocumentSectionDTO): DocumentSection {
+  return {
+    id: dto.id,
+    parentSectionId: dto.parentSectionId ?? undefined,
+    type: dto.type as DocumentSection['type'],
+    level: dto.level ?? undefined,
+    label: dto.label,
+    tableColumns: dto.tableColumns ?? undefined,
+    order: dto.order,
+    userContent: dto.userContent ?? undefined,
+    aiSuggestedContent: dto.aiSuggestedContent ?? undefined,
+    confidenceScore: dto.confidenceScore ?? undefined,
+    status: dto.status as DocumentSection['status'],
+  };
 }
 
-interface BackendGeneratedDocumentDTO {
+interface BackendDocumentDTO {
   id: string;
-  conversationId: string;
   documentTypeId: string;
   userId: string;
   status: string;
   language: string;
   tone: string;
-  targetLength?: string | null;
-  contentPivot?: string | null;
-  content?: string | null;
-  sections?: BackendGenerationSectionDTO[] | null;
+  sections?: BackendDocumentSectionDTO[] | null;
+  globalConfidenceScore?: number | null;
   createdAt: string;
   updatedAt?: string | null;
   exportUrl?: string | null;
 }
 
-function adaptGeneratedDocumentDTO(dto: BackendGeneratedDocumentDTO): GeneratedDocument {
+function adaptDocumentDTO(dto: BackendDocumentDTO): AppDocument {
   return {
     id: dto.id,
-    conversationId: dto.conversationId,
     documentTypeId: dto.documentTypeId,
     userId: dto.userId,
-    status: dto.status as GeneratedDocument['status'],
-    language: dto.language as GeneratedDocument['language'],
-    tone: dto.tone as GeneratedDocument['tone'],
-    // Absent côté DTO si non renseigné à la création (colonne nullable) —
-    // ne devrait pas arriver via startGeneration (toujours envoyé), repli
-    // défensif tout de même pour respecter le type non-optionnel.
-    targetLength: (dto.targetLength ?? 'MOYEN') as GeneratedDocument['targetLength'],
-    contentPivot: dto.contentPivot ?? '',
-    content: dto.content ?? '',
-    sections: (dto.sections ?? []).map(adaptGenerationSectionDTO),
+    status: dto.status as AppDocument['status'],
+    language: dto.language as AppDocument['language'],
+    tone: dto.tone as AppDocument['tone'],
+    sections: (dto.sections ?? []).map(adaptDocumentSectionDTO),
+    globalConfidenceScore: dto.globalConfidenceScore ?? undefined,
     createdAt: dto.createdAt,
-    // dateMaj (backend) reste null tant que le document n'a pas été modifié
-    // après sa création — repli sur createdAt pour respecter le type
-    // non-optionnel côté frontend.
-    updatedAt: dto.updatedAt ?? dto.createdAt,
+    updatedAt: dto.updatedAt ?? undefined,
     exportUrl: dto.exportUrl ?? undefined,
   };
 }
 
-export async function startGeneration(input: {
-  conversationId: string;
-  documentTypeId: string;
-  userId: string;
-  language: GeneratedDocument['language'];
-  tone: GeneratedDocument['tone'];
-  targetLength: GeneratedDocument['targetLength'];
-  contentPivot: string;
-}): Promise<ApiSuccess<GeneratedDocument>> {
+export async function createDocument(documentTypeId: string): Promise<ApiSuccess<AppDocument>> {
   try {
-    const res = await http.post<{ data: BackendGeneratedDocumentDTO }>('/generations', input);
-    return ok(adaptGeneratedDocumentDTO(res.data.data));
+    const res = await http.post<{ data: BackendDocumentDTO }>('/documents', { documentTypeId });
+    return ok(adaptDocumentDTO(res.data.data));
   } catch (e) {
-    throw toApiError(e, '/api/v1/generations');
+    throw toApiError(e, '/api/v1/documents');
   }
 }
 
-export async function listGenerations(userId: string): Promise<ApiSuccess<GeneratedDocument[]>> {
+export async function listDocuments(userId: string): Promise<ApiSuccess<AppDocument[]>> {
   try {
-    const res = await http.get<{ data: BackendGeneratedDocumentDTO[] }>('/generations', { params: { userId } });
-    return ok(res.data.data.map(adaptGeneratedDocumentDTO));
+    const res = await http.get<{ data: BackendDocumentDTO[] }>('/documents', { params: { userId } });
+    return ok(res.data.data.map(adaptDocumentDTO));
   } catch (e) {
-    throw toApiError(e, '/api/v1/generations');
+    throw toApiError(e, '/api/v1/documents');
   }
 }
 
-export async function getGeneration(id: string): Promise<ApiSuccess<GeneratedDocument>> {
+export async function getDocument(id: string): Promise<ApiSuccess<AppDocument>> {
   try {
-    const res = await http.get<{ data: BackendGeneratedDocumentDTO }>(`/generations/${id}`);
-    return ok(adaptGeneratedDocumentDTO(res.data.data));
+    const res = await http.get<{ data: BackendDocumentDTO }>(`/documents/${id}`);
+    return ok(adaptDocumentDTO(res.data.data));
   } catch (e) {
-    throw toApiError(e, `/api/v1/generations/${id}`);
+    throw toApiError(e, `/api/v1/documents/${id}`);
   }
 }
 
-export async function updateGeneration(id: string, patch: Partial<GeneratedDocument>): Promise<ApiSuccess<GeneratedDocument>> {
+/** Autosave — voir hook `useDebouncedSectionSave` (frontend/app/(app)/documents/[id]/page.tsx) pour la stratégie de debounce. */
+export async function updateDocumentSection(documentId: string, sectionId: string, content: string): Promise<ApiSuccess<DocumentSection>> {
   try {
-    // Le backend n'accepte que le contenu (édition manuelle) et force
-    // lui-même le statut à EN_EDITION — tout patch.status fourni ici est
-    // ignoré côté serveur (cf. GenerationService#update). Le statut
-    // GENERE/ECHEC de fin de génération est, lui, positionné automatiquement
-    // par le flux SSE (GenerationStreamService), jamais via cet appel.
-    const res = await http.patch<{ data: BackendGeneratedDocumentDTO }>(`/generations/${id}`, { content: patch.content });
-    return ok(adaptGeneratedDocumentDTO(res.data.data));
+    const res = await http.put<{ data: BackendDocumentSectionDTO }>(`/documents/${documentId}/sections/${sectionId}`, { content });
+    return ok(adaptDocumentSectionDTO(res.data.data));
   } catch (e) {
-    throw toApiError(e, `/api/v1/generations/${id}`);
+    throw toApiError(e, `/api/v1/documents/${documentId}/sections/${sectionId}`);
+  }
+}
+
+/** Retourne la suggestion IA sans jamais l'appliquer — voir applySectionSuggestion/rejectSectionSuggestion. `confidenceScore` est absent quand le fournisseur n'a pas respecté le format de réponse attendu. */
+export async function improveDocumentSection(
+  documentId: string,
+  sectionId: string,
+): Promise<ApiSuccess<{ aiSuggestedContent: string; confidenceScore?: number }>> {
+  try {
+    const res = await http.post<{ data: { aiSuggestedContent: string; confidenceScore?: number } }>(`/documents/${documentId}/sections/${sectionId}/improve`);
+    return ok(res.data.data);
+  } catch (e) {
+    throw toApiError(e, `/api/v1/documents/${documentId}/sections/${sectionId}/improve`);
+  }
+}
+
+export async function applySectionSuggestion(documentId: string, sectionId: string): Promise<ApiSuccess<DocumentSection>> {
+  try {
+    const res = await http.post<{ data: BackendDocumentSectionDTO }>(`/documents/${documentId}/sections/${sectionId}/apply-suggestion`);
+    return ok(adaptDocumentSectionDTO(res.data.data));
+  } catch (e) {
+    throw toApiError(e, `/api/v1/documents/${documentId}/sections/${sectionId}/apply-suggestion`);
+  }
+}
+
+export async function rejectSectionSuggestion(documentId: string, sectionId: string): Promise<ApiSuccess<DocumentSection>> {
+  try {
+    const res = await http.post<{ data: BackendDocumentSectionDTO }>(`/documents/${documentId}/sections/${sectionId}/reject-suggestion`);
+    return ok(adaptDocumentSectionDTO(res.data.data));
+  } catch (e) {
+    throw toApiError(e, `/api/v1/documents/${documentId}/sections/${sectionId}/reject-suggestion`);
+  }
+}
+
+export async function finalizeDocument(id: string): Promise<ApiSuccess<AppDocument>> {
+  try {
+    const res = await http.post<{ data: BackendDocumentDTO }>(`/documents/${id}/finalize`);
+    return ok(adaptDocumentDTO(res.data.data));
+  } catch (e) {
+    throw toApiError(e, `/api/v1/documents/${id}/finalize`);
+  }
+}
+
+/**
+ * Téléchargement du document dans le format demandé — le contenu est
+ * réassemblé côté serveur depuis les sections à chaque appel (donc toujours à
+ * jour), indépendamment de l'archive DOCX déposée sur MinIO à la finalisation.
+ */
+export async function exportDocumentFile(id: string, format: ExportFormat): Promise<Blob> {
+  try {
+    const res = await http.get(`/documents/${id}/export`, {
+      params: { format: EXPORT_FORMAT_MAP[format] },
+      responseType: 'blob',
+    });
+    return res.data as Blob;
+  } catch (e) {
+    throw toApiError(e, `/api/v1/documents/${id}/export`);
   }
 }
 

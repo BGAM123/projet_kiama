@@ -45,7 +45,7 @@ interface NavItem {
 const navItems: NavItem[] = [
   { href: '/dashboard', label: 'Tableau de bord', icon: LayoutDashboard },
   { href: '/documents-types', label: 'Documents Types', icon: FileText },
-  { href: '/chat', label: 'Générer document', icon: Bot },
+  { href: '/documents/new', label: 'Nouveau document', icon: Bot },
   { href: '/history', label: 'Historique', icon: History },
   { href: '/admin/categories', label: 'Catégories', icon: FolderTree, requireAdmin: true },
   { href: '/admin/users', label: 'Utilisateurs', icon: Users, requireAdmin: true },

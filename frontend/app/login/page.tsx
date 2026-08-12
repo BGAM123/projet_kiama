@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -69,11 +70,11 @@ export default function LoginPage() {
               Générez des documents professionnels, conformes à votre charte.
             </h1>
             <p className="text-primary-foreground/80">
-              Importez vos documents existants, laissez l'IA en extraire la structure, puis produisez en quelques minutes de nouveaux rapports, propositions et comptes rendus via une interface de chat.
+              Importez vos documents existants ou décrivez-les en langage naturel pour en obtenir le squelette, puis rédigez chaque section vous-même — avec l'IA comme assistant de reformulation à la demande.
             </p>
             <ul className="space-y-2 text-sm text-primary-foreground/85">
-              <li className="flex items-center gap-2"><Sparkles className="h-4 w-4 text-accent" /> Extraction automatique de la structure documentaire</li>
-              <li className="flex items-center gap-2"><Sparkles className="h-4 w-4 text-accent" /> Génération IA section par section, en streaming</li>
+              <li className="flex items-center gap-2"><Sparkles className="h-4 w-4 text-accent" /> Extraction ou génération IA de la structure documentaire</li>
+              <li className="flex items-center gap-2"><Sparkles className="h-4 w-4 text-accent" /> Rédaction manuelle assistée, section par section</li>
               <li className="flex items-center gap-2"><Sparkles className="h-4 w-4 text-accent" /> Édition WYSIWYG & export DOCX / PDF / Markdown</li>
             </ul>
           </div>

@@ -31,6 +31,11 @@ public class PdfDocumentExporter implements DocumentExporter {
     private static final float[] HEADING_FONT_SIZE = {18f, 15f, 13f, 12f, 11f, 11f};
     private static final float HEADER_FOOTER_FONT_SIZE = 9f;
     private static final float TABLE_CELL_PADDING = 4f;
+    private static final float LIST_INDENT_PER_LEVEL = 16f;
+
+    /** Fragment de ligne prêt à être dessiné : texte homogène + police résolue. */
+    private record Piece(String text, PDFont font, boolean underline) {
+    }
 
     @Override
     public ExportFormat supportedFormat() {
@@ -52,6 +57,10 @@ public class PdfDocumentExporter implements DocumentExporter {
                     cursor.writeParagraph(paragraph.text());
                 } else if (block instanceof MarkdownContentParser.TableBlock table) {
                     cursor.writeTable(table.rows());
+                } else if (block instanceof MarkdownContentParser.ListBlock list) {
+                    cursor.writeList(list);
+                } else if (block instanceof MarkdownContentParser.RuleBlock) {
+                    cursor.writeHorizontalRule();
                 }
             }
             cursor.finish(request.headerText(), request.footerText());
@@ -68,6 +77,9 @@ public class PdfDocumentExporter implements DocumentExporter {
         private final PDDocument document;
         private final PDFont bodyFont = new PDType1Font(Standard14Fonts.FontName.HELVETICA);
         private final PDFont boldFont = new PDType1Font(Standard14Fonts.FontName.HELVETICA_BOLD);
+        private final PDFont italicFont = new PDType1Font(Standard14Fonts.FontName.HELVETICA_OBLIQUE);
+        private final PDFont boldItalicFont = new PDType1Font(Standard14Fonts.FontName.HELVETICA_BOLD_OBLIQUE);
+        private final PDFont monoFont = new PDType1Font(Standard14Fonts.FontName.COURIER);
         private final float pageWidth = PDRectangle.A4.getWidth() - 2 * MARGIN;
         private final float topMargin;
         private final float bottomMargin;
@@ -98,12 +110,107 @@ public class PdfDocumentExporter implements DocumentExporter {
         }
 
         void writeParagraph(String paragraph) throws IOException {
-            for (String wrapped : wrap(paragraph, bodyFont, BODY_FONT_SIZE, pageWidth)) {
-                ensureSpace(LINE_HEIGHT);
-                text(bodyFont, BODY_FONT_SIZE, wrapped);
-                y -= LINE_HEIGHT;
+            writeFlowed(MarkdownContentParser.inline(paragraph), 0f, null);
+            y -= LINE_HEIGHT / 2;
+        }
+
+        void writeList(MarkdownContentParser.ListBlock list) throws IOException {
+            int counter = 0;
+            for (MarkdownContentParser.ListItem item : list.items()) {
+                counter++;
+                float indent = LIST_INDENT_PER_LEVEL * (item.depth() + 1);
+                writeFlowed(MarkdownContentParser.inline(item.text()), indent, list.ordered() ? counter + ". " : "• ");
             }
             y -= LINE_HEIGHT / 2;
+        }
+
+        void writeHorizontalRule() throws IOException {
+            ensureSpace(LINE_HEIGHT);
+            stream.setLineWidth(0.5f);
+            stream.moveTo(MARGIN, y);
+            stream.lineTo(MARGIN + pageWidth, y);
+            stream.stroke();
+            y -= LINE_HEIGHT;
+        }
+
+        /**
+         * Rend une suite de fragments en changeant de police au fil du texte,
+         * avec retour à la ligne au mot. PDFBox n'ayant pas de notion de flux
+         * de texte, la largeur est mesurée fragment par fragment et le curseur
+         * horizontal avance manuellement — c'est le prix d'un gras qui ressort
+         * réellement en gras plutôt qu'en astérisques.
+         */
+        private void writeFlowed(List<MarkdownContentParser.Segment> segments, float indent, String prefix)
+                throws IOException {
+            float maxWidth = pageWidth - indent;
+            List<List<Piece>> lines = new ArrayList<>();
+            List<Piece> current = new ArrayList<>();
+            float currentWidth = 0f;
+
+            if (prefix != null && !prefix.isEmpty()) {
+                current.add(new Piece(prefix, bodyFont, false));
+                currentWidth += width(prefix, bodyFont, BODY_FONT_SIZE);
+            }
+            for (MarkdownContentParser.Segment segment : segments) {
+                PDFont font = fontFor(segment);
+                String[] words = segment.text().split(" ", -1);
+                for (int i = 0; i < words.length; i++) {
+                    String piece = i > 0 ? " " + words[i] : words[i];
+                    if (piece.isEmpty()) {
+                        continue;
+                    }
+                    float pieceWidth = width(piece, font, BODY_FONT_SIZE);
+                    if (!current.isEmpty() && currentWidth + pieceWidth > maxWidth) {
+                        lines.add(current);
+                        current = new ArrayList<>();
+                        currentWidth = 0f;
+                        piece = words[i]; // pas d'espace en début de ligne
+                        if (piece.isEmpty()) {
+                            continue;
+                        }
+                        pieceWidth = width(piece, font, BODY_FONT_SIZE);
+                    }
+                    current.add(new Piece(piece, font, segment.href() != null));
+                    currentWidth += pieceWidth;
+                }
+            }
+            if (!current.isEmpty()) {
+                lines.add(current);
+            }
+
+            for (List<Piece> line : lines) {
+                ensureSpace(LINE_HEIGHT);
+                float x = MARGIN + indent;
+                for (Piece piece : line) {
+                    float pieceWidth = width(piece.text(), piece.font(), BODY_FONT_SIZE);
+                    stream.beginText();
+                    stream.setFont(piece.font(), BODY_FONT_SIZE);
+                    stream.newLineAtOffset(x, y);
+                    stream.showText(piece.text());
+                    stream.endText();
+                    if (piece.underline()) {
+                        stream.setLineWidth(0.5f);
+                        stream.moveTo(x, y - 1.5f);
+                        stream.lineTo(x + pieceWidth, y - 1.5f);
+                        stream.stroke();
+                    }
+                    x += pieceWidth;
+                }
+                y -= LINE_HEIGHT;
+            }
+        }
+
+        private PDFont fontFor(MarkdownContentParser.Segment segment) {
+            if (segment.code()) {
+                return monoFont;
+            }
+            if (segment.bold() && segment.italic()) {
+                return boldItalicFont;
+            }
+            if (segment.bold()) {
+                return boldFont;
+            }
+            return segment.italic() ? italicFont : bodyFont;
         }
 
         void writeTable(List<List<String>> rows) throws IOException {
@@ -119,7 +226,11 @@ public class PdfDocumentExporter implements DocumentExporter {
                 List<List<String>> wrappedCells = new ArrayList<>();
                 int lineCount = 1;
                 for (int c = 0; c < columnCount; c++) {
-                    String cellText = c < row.size() ? row.get(c) : "";
+                    // Cellule rendue en texte simple : mélanger les polices dans
+                    // une grille dessinée à la main ne vaut pas sa complexité,
+                    // mais les marques sont retirées pour ne pas afficher les
+                    // astérisques brutes.
+                    String cellText = MarkdownContentParser.plainText(c < row.size() ? row.get(c) : "");
                     List<String> wrapped = wrap(cellText, bodyFont, BODY_FONT_SIZE, colWidth - 2 * TABLE_CELL_PADDING);
                     wrappedCells.add(wrapped);
                     lineCount = Math.max(lineCount, wrapped.size());

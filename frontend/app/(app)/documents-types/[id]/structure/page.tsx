@@ -21,6 +21,7 @@ import {
   Type,
   List,
   CheckCircle2,
+  PenLine,
 } from 'lucide-react';
 import { PageHeader } from '@/components/page-header';
 import { Card, CardContent } from '@/components/ui/card';
@@ -35,6 +36,8 @@ import type { StructureNode, DocumentType } from '@/types';
 const nodeIcon: Record<StructureNode['type'], React.ComponentType<{ className?: string }>> = {
   heading: Type,
   paragraph: Type,
+  // Emplacement de paragraphe à rédiger manuellement (flux "décrire en texte -> squelette généré par IA").
+  paragraph_placeholder: PenLine,
   table: Table2,
   list: List,
   cover: FileText,

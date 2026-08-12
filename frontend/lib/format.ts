@@ -1,4 +1,4 @@
-import type { DocumentTypeStatus, GeneratedDocumentStatus } from '@/types';
+import type { DocumentTypeStatus, DocumentStatus, DocumentSectionStatus } from '@/types';
 
 export const documentTypeStatusLabel: Record<DocumentTypeStatus, string> = {
   IMPORTE: 'Importé',
@@ -20,24 +20,31 @@ export const documentTypeStatusTone: Record<DocumentTypeStatus, string> = {
   ARCHIVE: 'bg-muted text-muted-foreground border-border',
 };
 
-export const generatedStatuslabel: Record<GeneratedDocumentStatus, string> = {
+export const documentStatusLabel: Record<DocumentStatus, string> = {
   BROUILLON: 'Brouillon',
-  EN_GENERATION: 'Génération en cours',
-  GENERE: 'Généré',
-  ECHEC: 'Échec',
-  EN_EDITION: 'En édition',
-  EXPORTE: 'Exporté',
+  FINALISE: 'Finalisé',
   ARCHIVE: 'Archivé',
 };
 
-export const generatedStatusTone: Record<GeneratedDocumentStatus, string> = {
+export const documentStatusTone: Record<DocumentStatus, string> = {
   BROUILLON: 'bg-muted text-muted-foreground border-border',
-  EN_GENERATION: 'bg-warning/15 text-warning border-warning/30',
-  GENERE: 'bg-success/15 text-success border-success/30',
-  ECHEC: 'bg-destructive/15 text-destructive border-destructive/30',
-  EN_EDITION: 'bg-info/15 text-info border-info/30',
-  EXPORTE: 'bg-primary/15 text-primary border-primary/30',
+  FINALISE: 'bg-success/15 text-success border-success/30',
   ARCHIVE: 'bg-muted text-muted-foreground border-border',
+};
+
+export const sectionStatusLabel: Record<DocumentSectionStatus, string> = {
+  EMPTY: 'Vide',
+  DRAFTED: 'Rédigée',
+  AI_IMPROVED: 'Améliorée par l\'IA',
+  FINALIZED: 'Finalisée',
+};
+
+/** Couleur de la pastille de statut par section, dans la liste des sections. */
+export const sectionStatusDot: Record<DocumentSectionStatus, string> = {
+  EMPTY: 'bg-muted-foreground/40',
+  DRAFTED: 'bg-warning',
+  AI_IMPROVED: 'bg-success',
+  FINALIZED: 'bg-success',
 };
 
 export const toneLabel: Record<string, string> = {
