@@ -1,12 +1,16 @@
 package com.docuai.api.service;
 
+import com.docuai.ai.dto.GeneratedSectionContent;
 import com.docuai.ai.dto.GenerationRequest;
 import com.docuai.ai.dto.SectionImprovement;
+import com.docuai.ai.exception.AiProviderException;
+import com.docuai.ai.service.DocumentContentResponseParser;
 import com.docuai.ai.service.GenerationOrchestrator;
 import com.docuai.ai.service.PromptBuilder;
 import com.docuai.ai.service.SectionImprovementResponseParser;
 import com.docuai.api.dto.CreateDocumentRequest;
 import com.docuai.api.dto.DocumentDTO;
+import com.docuai.api.dto.GenerateDocumentRequest;
 import com.docuai.api.dto.SectionSuggestionDTO;
 import com.docuai.api.exception.NotFoundException;
 import com.docuai.api.mapper.DocumentMapper;
@@ -43,9 +47,12 @@ import org.springframework.web.multipart.MultipartFile;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.OptionalDouble;
 import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
  * Cycle de vie d'un document en édition manuelle assistée : création (à
@@ -58,6 +65,8 @@ import java.util.UUID;
 public class DocumentService {
 
     private static final Logger log = LoggerFactory.getLogger(DocumentService.class);
+    /** Même borne que {@code DocumentTypeGenerationService} : un JSON malformé déclenche une nouvelle tentative, jamais un contenu incomplet. */
+    private static final int CONTENT_GENERATION_MAX_ATTEMPTS = 3;
 
     private final DocumentRepository documentRepository;
     private final DocumentSectionRepository documentSectionRepository;
@@ -66,9 +75,11 @@ public class DocumentService {
     private final DocumentMapper documentMapper;
     private final DocumentSectionMapper documentSectionMapper;
     private final DocumentSkeletonHtmlBuilder skeletonHtmlBuilder;
+    private final DocumentContentHtmlBuilder documentContentHtmlBuilder;
     private final GenerationOrchestrator generationOrchestrator;
     private final PromptBuilder promptBuilder;
     private final SectionImprovementResponseParser sectionImprovementResponseParser;
+    private final DocumentContentResponseParser documentContentResponseParser;
     private final FileIngestionService fileIngestionService;
     private final DocxHtmlImporter docxHtmlImporter;
     private final ExportService exportService;
@@ -82,9 +93,11 @@ public class DocumentService {
                             DocumentMapper documentMapper,
                             DocumentSectionMapper documentSectionMapper,
                             DocumentSkeletonHtmlBuilder skeletonHtmlBuilder,
+                            DocumentContentHtmlBuilder documentContentHtmlBuilder,
                             GenerationOrchestrator generationOrchestrator,
                             PromptBuilder promptBuilder,
                             SectionImprovementResponseParser sectionImprovementResponseParser,
+                            DocumentContentResponseParser documentContentResponseParser,
                             FileIngestionService fileIngestionService,
                             DocxHtmlImporter docxHtmlImporter,
                             ExportService exportService,
@@ -97,9 +110,11 @@ public class DocumentService {
         this.documentMapper = documentMapper;
         this.documentSectionMapper = documentSectionMapper;
         this.skeletonHtmlBuilder = skeletonHtmlBuilder;
+        this.documentContentHtmlBuilder = documentContentHtmlBuilder;
         this.generationOrchestrator = generationOrchestrator;
         this.promptBuilder = promptBuilder;
         this.sectionImprovementResponseParser = sectionImprovementResponseParser;
+        this.documentContentResponseParser = documentContentResponseParser;
         this.fileIngestionService = fileIngestionService;
         this.docxHtmlImporter = docxHtmlImporter;
         this.exportService = exportService;
@@ -168,6 +183,89 @@ public class DocumentService {
         document = documentRepository.save(document);
 
         return toDto(document, List.of());
+    }
+
+    /**
+     * Troisième point d'entrée de la rédaction, à côté de {@link #create}
+     * (squelette vide) et {@link #importDocument} (fichier existant) : le plan
+     * d'un Document Type déjà choisi, rempli par l'IA à partir d'une
+     * description en langage naturel de ce que l'utilisateur veut obtenir —
+     * même principe que "Générer avec l'IA" pour un Document Type ({@code
+     * DocumentTypeGenerationService}), mais ici le plan est déjà fixé : le LLM
+     * ne produit que le contenu, jamais la structure.
+     * <p>
+     * Le document est créé même si la génération échoue après {@link
+     * #CONTENT_GENERATION_MAX_ATTEMPTS} tentatives (JSON malformé, fournisseur
+     * IA indisponible) — dégradation vers un squelette vide plutôt qu'une
+     * erreur, cohérent avec {@link #create}. Une réponse partielle (le modèle a
+     * oublié certaines sections) n'est pas non plus un échec : {@link
+     * DocumentContentHtmlBuilder} retombe section par section sur le rendu
+     * vide du squelette pour tout {@code id} absent de la réponse.
+     */
+    @Transactional
+    public DocumentDTO generateContent(GenerateDocumentRequest request, Utilisateur currentUser) {
+        DocumentType documentType = documentTypeRepository.findById(request.getDocumentTypeId())
+                .orElseThrow(() -> new NotFoundException("DOCUMENT_TYPE_NOT_FOUND", "Document Type introuvable."));
+        DocumentStructure structure = documentStructureRepository.findByDocumentType_Id(documentType.getId())
+                .orElseThrow(() -> new NotFoundException("STRUCTURE_NOT_FOUND", "Aucune structure trouvée pour ce Document Type."));
+        List<StructureNode> tree = structure.getArbreJson();
+
+        Document document = Document.builder()
+                .documentType(documentType)
+                .utilisateur(currentUser)
+                // Contenu déjà produit par l'IA, jamais un squelette vierge :
+                // le document part directement en SAUVEGARDE, pas en BROUILLON.
+                .statut(DocumentStatut.SAUVEGARDE)
+                .titre(request.getName())
+                .build();
+
+        Map<String, GeneratedSectionContent> generated = generateSectionContents(
+                documentType.getNom(), request.getDescription(), tree,
+                document.getLangue().name(), document.getTon().name());
+        document.setContentHtml(documentContentHtmlBuilder.build(tree, generated));
+        document = documentRepository.save(document);
+
+        List<DocumentSection> sections = new ArrayList<>();
+        flatten(tree, document, null, sections);
+        documentSectionRepository.saveAll(sections);
+
+        return toDto(document, sections);
+    }
+
+    /**
+     * Boucle de tentatives calquée sur {@code DocumentTypeGenerationService#runGeneration}
+     * (même borne, même logique) : un JSON malformé ou un fournisseur IA en
+     * échec redémarre la génération depuis le même prompt, jusqu'à épuisement.
+     * Contrairement au flux squelette, l'épuisement des tentatives n'empêche
+     * pas la création du document — {@link #generateContent} retombe sur une
+     * correspondance vide (squelette non rempli) plutôt que de faire échouer
+     * toute la requête pour un problème de format côté modèle.
+     */
+    private Map<String, GeneratedSectionContent> generateSectionContents(
+            String documentTypeName, String description, List<StructureNode> tree, String language, String tone) {
+        String systemPrompt = promptBuilder.buildDocumentContentSystemPrompt(documentTypeName, description, tree, language, tone);
+
+        for (int attempt = 1; attempt <= CONTENT_GENERATION_MAX_ATTEMPTS; attempt++) {
+            try {
+                GenerationRequest request = GenerationRequest.builder()
+                        .systemPrompt(systemPrompt)
+                        .userPrompt("Génère le contenu JSON pour ce document, en respectant strictement le schéma décrit.")
+                        .build();
+                String raw = generationOrchestrator.generate(request).getContent();
+                List<GeneratedSectionContent> sections = documentContentResponseParser.parse(raw);
+                return sections.stream()
+                        .filter(section -> section.getId() != null)
+                        // Un id dupliqué dans la réponse ne doit pas faire
+                        // échouer la collecte : la première occurrence gagne.
+                        .collect(Collectors.toMap(GeneratedSectionContent::getId, Function.identity(), (a, b) -> a));
+            } catch (DocumentContentResponseParser.DocumentContentParseException | AiProviderException e) {
+                log.warn("Échec de génération de contenu IA (tentative {}/{}) : {}",
+                        attempt, CONTENT_GENERATION_MAX_ATTEMPTS, e.getMessage());
+            }
+        }
+        log.warn("Génération de contenu IA épuisée après {} tentatives — document créé avec un squelette vide.",
+                CONTENT_GENERATION_MAX_ATTEMPTS);
+        return Map.of();
     }
 
     /** Un bloc vide entre deux lignes vides = un nouveau paragraphe — même découpage que {@code StructureExtractionService.extractPlainText}, mais en HTML plutôt qu'en nœuds de structure. */

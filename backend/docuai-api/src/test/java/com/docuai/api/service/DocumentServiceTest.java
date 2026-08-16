@@ -1,7 +1,10 @@
 package com.docuai.api.service;
 
+import com.docuai.ai.dto.GeneratedSectionContent;
+import com.docuai.ai.dto.GenerationResult;
 import com.docuai.api.dto.CreateDocumentRequest;
 import com.docuai.api.dto.DocumentDTO;
+import com.docuai.api.dto.GenerateDocumentRequest;
 import com.docuai.api.mapper.DocumentMapper;
 import com.docuai.api.mapper.DocumentSectionMapper;
 import com.docuai.core.model.Document;
@@ -60,6 +63,7 @@ class DocumentServiceTest {
     @Mock private com.docuai.ai.service.GenerationOrchestrator generationOrchestrator;
     @Mock private com.docuai.ai.service.PromptBuilder promptBuilder;
     @Mock private com.docuai.ai.service.SectionImprovementResponseParser sectionImprovementResponseParser;
+    @Mock private com.docuai.ai.service.DocumentContentResponseParser documentContentResponseParser;
     @Mock private FileIngestionService fileIngestionService;
     @Mock private com.docuai.extraction.html.DocxHtmlImporter docxHtmlImporter;
     @Mock private ExportService exportService;
@@ -78,9 +82,9 @@ class DocumentServiceTest {
         // vérifier à la création.
         service = new DocumentService(documentRepository, documentSectionRepository, documentTypeRepository,
                 documentStructureRepository, documentMapper, documentSectionMapper,
-                new DocumentSkeletonHtmlBuilder(), generationOrchestrator, promptBuilder,
-                sectionImprovementResponseParser, fileIngestionService, docxHtmlImporter,
-                exportService, objectStorageService, minioProperties);
+                new DocumentSkeletonHtmlBuilder(new DocumentContentHtmlBuilder()), new DocumentContentHtmlBuilder(),
+                generationOrchestrator, promptBuilder, sectionImprovementResponseParser, documentContentResponseParser,
+                fileIngestionService, docxHtmlImporter, exportService, objectStorageService, minioProperties);
     }
 
     private DocumentType documentType() {
@@ -164,6 +168,112 @@ class DocumentServiceTest {
                 // La page de garde devient une vraie page de garde, alors
                 // qu'elle n'était pas une section éditable.
                 .contains("data-page-break");
+    }
+
+    /**
+     * Troisième point d'entrée de la rédaction : le plan du Document Type est
+     * déjà fixé, l'IA ne fait que le remplir — le document créé porte le
+     * contenu généré, le titre saisi par l'utilisateur (pas celui du Document
+     * Type) et démarre directement en SAUVEGARDE (du contenu existe déjà, ce
+     * n'est plus un squelette vierge).
+     */
+    @Test
+    void generateContent_fillsTheTemplateWithAiContent_andStartsAsSauvegarde() {
+        when(documentTypeRepository.findById(documentTypeId)).thenReturn(Optional.of(documentType()));
+        when(documentStructureRepository.findByDocumentType_Id(documentTypeId))
+                .thenReturn(Optional.of(DocumentStructure.builder().arbreJson(sampleTree()).build()));
+        when(generationOrchestrator.generate(any())).thenReturn(GenerationResult.builder().content("peu importe").build());
+        when(documentContentResponseParser.parse("peu importe")).thenReturn(List.of(
+                GeneratedSectionContent.builder().id("n2").content("Contexte rédigé par l'IA.").build(),
+                GeneratedSectionContent.builder().id("n3").rows(List.of(List.of("420k"))).build()));
+        when(documentRepository.save(any(Document.class))).thenAnswer(inv -> {
+            Document d = inv.getArgument(0);
+            if (d.getId() == null) d.setId(UUID.randomUUID());
+            return d;
+        });
+        when(documentSectionRepository.saveAll(anyList())).thenAnswer(inv -> inv.getArgument(0));
+        when(documentMapper.toDto(any(Document.class))).thenReturn(new DocumentDTO());
+
+        GenerateDocumentRequest request = new GenerateDocumentRequest();
+        request.setDocumentTypeId(documentTypeId);
+        request.setName("Audit sécurité 2026");
+        request.setDescription("Un audit de la sécurité informatique du siège.");
+        DocumentDTO dto = service.generateContent(request, user);
+
+        ArgumentCaptor<Document> captor = ArgumentCaptor.forClass(Document.class);
+        verify(documentRepository).save(captor.capture());
+        Document saved = captor.getValue();
+        assertThat(saved.getTitre()).isEqualTo("Audit sécurité 2026");
+        assertThat(saved.getStatut()).isEqualTo(DocumentStatut.SAUVEGARDE);
+        assertThat(saved.getContentHtml()).contains("Contexte rédigé par l'IA.").contains("<td><p>420k</p></td>");
+        assertThat(dto.getTitle()).isEqualTo("Audit sécurité 2026");
+    }
+
+    /**
+     * Le plan du Document Type reste la source de vérité : une réponse IA qui
+     * inventerait un id absent du plan (ou une hallucination totale) ne doit
+     * jamais faire apparaître de contenu hors du plan validé — seuls les ids
+     * réellement présents dans l'arbre sont exploités.
+     */
+    @Test
+    void generateContent_ignoresGeneratedContent_forIdsOutsideThePlan() {
+        when(documentTypeRepository.findById(documentTypeId)).thenReturn(Optional.of(documentType()));
+        when(documentStructureRepository.findByDocumentType_Id(documentTypeId))
+                .thenReturn(Optional.of(DocumentStructure.builder().arbreJson(sampleTree()).build()));
+        when(generationOrchestrator.generate(any())).thenReturn(GenerationResult.builder().content("peu importe").build());
+        when(documentContentResponseParser.parse("peu importe")).thenReturn(List.of(
+                GeneratedSectionContent.builder().id("id-invente-par-le-modele").content("Hors plan.").build()));
+        when(documentRepository.save(any(Document.class))).thenAnswer(inv -> {
+            Document d = inv.getArgument(0);
+            if (d.getId() == null) d.setId(UUID.randomUUID());
+            return d;
+        });
+        when(documentSectionRepository.saveAll(anyList())).thenAnswer(inv -> inv.getArgument(0));
+        when(documentMapper.toDto(any(Document.class))).thenReturn(new DocumentDTO());
+
+        GenerateDocumentRequest request = new GenerateDocumentRequest();
+        request.setDocumentTypeId(documentTypeId);
+        request.setName("Audit");
+        request.setDescription("Un audit.");
+        service.generateContent(request, user);
+
+        ArgumentCaptor<Document> captor = ArgumentCaptor.forClass(Document.class);
+        verify(documentRepository).save(captor.capture());
+        assertThat(captor.getValue().getContentHtml()).doesNotContain("Hors plan.");
+    }
+
+    /**
+     * Le fournisseur IA échoue systématiquement (ou renvoie du JSON malformé) :
+     * le document doit tout de même être créé — repli sur le squelette vide,
+     * comme {@link #create}, plutôt qu'une erreur qui priverait l'utilisateur
+     * du document.
+     */
+    @Test
+    void generateContent_fallsBackToAnEmptySkeleton_whenAiGenerationKeepsFailing() {
+        when(documentTypeRepository.findById(documentTypeId)).thenReturn(Optional.of(documentType()));
+        when(documentStructureRepository.findByDocumentType_Id(documentTypeId))
+                .thenReturn(Optional.of(DocumentStructure.builder().arbreJson(sampleTree()).build()));
+        when(generationOrchestrator.generate(any()))
+                .thenThrow(new com.docuai.ai.exception.AiProviderException("Fournisseur indisponible."));
+        when(documentRepository.save(any(Document.class))).thenAnswer(inv -> {
+            Document d = inv.getArgument(0);
+            if (d.getId() == null) d.setId(UUID.randomUUID());
+            return d;
+        });
+        when(documentSectionRepository.saveAll(anyList())).thenAnswer(inv -> inv.getArgument(0));
+        when(documentMapper.toDto(any(Document.class))).thenReturn(new DocumentDTO());
+
+        GenerateDocumentRequest request = new GenerateDocumentRequest();
+        request.setDocumentTypeId(documentTypeId);
+        request.setName("Audit");
+        request.setDescription("Un audit.");
+        DocumentDTO dto = service.generateContent(request, user);
+
+        verify(generationOrchestrator, org.mockito.Mockito.times(3)).generate(any());
+        ArgumentCaptor<Document> captor = ArgumentCaptor.forClass(Document.class);
+        verify(documentRepository).save(captor.capture());
+        assertThat(captor.getValue().getContentHtml()).contains("<h2>Contexte</h2><p></p>");
+        assertThat(dto).isNotNull();
     }
 
     /**

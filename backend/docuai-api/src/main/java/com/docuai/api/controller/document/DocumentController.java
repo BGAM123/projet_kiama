@@ -4,6 +4,7 @@ import com.docuai.api.dto.ApiResponse;
 import com.docuai.api.dto.CreateDocumentRequest;
 import com.docuai.api.dto.DocumentDTO;
 import com.docuai.api.dto.DocumentSectionDTO;
+import com.docuai.api.dto.GenerateDocumentRequest;
 import com.docuai.api.dto.ImproveTextRequest;
 import com.docuai.api.dto.SectionSuggestionDTO;
 import com.docuai.api.dto.UpdateDocumentContentRequest;
@@ -56,6 +57,23 @@ public class DocumentController {
     public ResponseEntity<ApiResponse<DocumentDTO>> create(@Valid @RequestBody CreateDocumentRequest request,
                                                              @AuthenticationPrincipal UserDetailsImpl principal) {
         return ResponseEntity.ok(ApiResponse.success(documentService.create(request, principal.getUtilisateur())));
+    }
+
+    /**
+     * Troisième point d'entrée de la rédaction, à côté de {@link #create}
+     * (squelette vide) et {@link #importDocument} (fichier existant) : le plan
+     * du Document Type choisi, rempli par l'IA à partir d'une description en
+     * langage naturel — même principe que "Générer avec l'IA" pour un
+     * Document Type, mais ici le plan est déjà fixé, seul le contenu est
+     * généré. Même autorité que les deux autres points d'entrée.
+     */
+    @PostMapping("/generate")
+    @PreAuthorize("hasAuthority('DOCUMENT_GENERATE')")
+    @Operation(summary = "Générer le contenu d'un document avec l'IA, à partir d'un Document Type et d'une description")
+    public ResponseEntity<ApiResponse<DocumentDTO>> generateContent(
+            @Valid @RequestBody GenerateDocumentRequest request,
+            @AuthenticationPrincipal UserDetailsImpl principal) {
+        return ResponseEntity.ok(ApiResponse.success(documentService.generateContent(request, principal.getUtilisateur())));
     }
 
     /**

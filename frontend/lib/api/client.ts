@@ -768,6 +768,27 @@ export async function importDocument(file: File): Promise<ApiSuccess<AppDocument
   }
 }
 
+/**
+ * Troisième point d'entrée de la rédaction, à côté de la création depuis un
+ * Document Type (squelette vide) et de l'import de fichier : le plan du
+ * Document Type choisi, rempli par l'IA à partir d'une description en langage
+ * naturel de ce que l'utilisateur veut obtenir — même principe que "Générer
+ * avec l'IA" côté Document Type, mais ici c'est le contenu qui est généré, pas
+ * la structure (déjà fixée par le Document Type sélectionné).
+ */
+export async function generateDocument(input: {
+  documentTypeId: string;
+  name: string;
+  description: string;
+}): Promise<ApiSuccess<AppDocument>> {
+  try {
+    const res = await http.post<{ data: BackendDocumentDTO }>('/documents/generate', input);
+    return ok(adaptDocumentDTO(res.data.data));
+  } catch (e) {
+    throw toApiError(e, '/api/v1/documents/generate');
+  }
+}
+
 export async function listDocuments(userId: string): Promise<ApiSuccess<AppDocument[]>> {
   try {
     const res = await http.get<{ data: BackendDocumentDTO[] }>('/documents', { params: { userId } });

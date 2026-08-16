@@ -2,6 +2,7 @@ package com.docuai.ai.service;
 
 import com.docuai.core.model.DocumentChunk;
 import com.docuai.core.model.StructureNode;
+import com.docuai.core.model.TableColumnDef;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -117,6 +118,113 @@ public class PromptBuilder {
 
                 Description du type de document souhaité par l'utilisateur :
                 """ + userDescription;
+    }
+
+    /**
+     * Prompt système du flux "Générer avec l'IA" sur un document déjà créé à
+     * partir d'un Document Type (section "Nouveau document" de la refonte) —
+     * distinct du flux squelette ({@link #buildSkeletonSystemPrompt}), qui
+     * produit un plan sans aucun contenu : ici le plan est déjà fixé (celui du
+     * Document Type choisi), le LLM ne fait que le remplir.
+     * <p>
+     * Chaque section à rédiger est identifiée par l'{@code id} de son {@link
+     * StructureNode} dans le plan rendu ci-dessous — c'est ce qui permet à
+     * {@link DocumentContentResponseParser} de reporter le contenu généré sur
+     * le bon nœud sans dépendre de l'ordre de la réponse, et à l'appelant de
+     * tolérer une réponse partielle (un {@code id} manquant reste simplement
+     * vide, plutôt que de faire échouer tout le document pour une seule
+     * section oubliée par le modèle).
+     */
+    public String buildDocumentContentSystemPrompt(String documentTypeName, String userDescription,
+                                                     List<StructureNode> tree, String language, String tone) {
+        StringBuilder outline = new StringBuilder();
+        renderContentOutline(tree, outline, 0);
+
+        return """
+                Tu es un rédacteur professionnel qui produit le CONTENU rédigé d'un document, à partir de son plan déjà fixé et de la description de ce que l'utilisateur souhaite obtenir.
+
+                Type de document : %s
+                Réponds exclusivement dans la langue suivante : %s. Adopte un ton %s.
+
+                Plan du document — respecte-le tel quel, ne modifie ni n'ajoute de section, les titres servent uniquement de contexte :
+                %s
+                Règles strictes :
+                - Ne rédige QUE les sections marquées "[À rédiger]" ou "[Tableau à remplir]" ci-dessus, chacune identifiée par son id entre crochets.
+                - Le contenu doit être cohérent avec la description de l'utilisateur et avec les sections voisines, jamais un texte générique interchangeable.
+                - Section paragraphe : un texte fluide (plusieurs phrases si pertinent), sans reprendre le titre, dans le champ "content".
+                - Section tableau : exactement le nombre de lignes indiqué, une valeur par colonne dans l'ordre donné, dans le champ "rows" (tableau de tableaux de chaînes).
+                - Réponds UNIQUEMENT avec un objet JSON strict, sans texte autour, sans balise Markdown de code, conforme exactement à ce schéma :
+
+                {
+                  "sections": [
+                    { "id": "identifiant-de-la-section", "content": "texte du paragraphe" },
+                    { "id": "identifiant-de-la-section-tableau", "rows": [["valeur1", "valeur2"], ["valeur1", "valeur2"]] }
+                  ]
+                }
+
+                Description de ce que l'utilisateur souhaite obtenir :
+                %s
+                """.formatted(
+                documentTypeName == null ? "Document" : documentTypeName,
+                language == null ? "FR" : language,
+                tone == null ? "neutre" : tone.toLowerCase(),
+                outline,
+                userDescription);
+    }
+
+    /** Colonnes attendues d'un nœud tableau — même repli que {@code DocumentSkeletonHtmlBuilder.headersOf} : tableColumns (flux IA) sinon columns (extraction déterministe) sinon un défaut générique. */
+    private List<String> columnsOf(StructureNode node) {
+        if (node.getTableColumns() != null && !node.getTableColumns().isEmpty()) {
+            return node.getTableColumns().stream().map(TableColumnDef::getName).toList();
+        }
+        if (node.getColumns() != null && !node.getColumns().isEmpty()) {
+            return node.getColumns();
+        }
+        return List.of("Colonne 1", "Colonne 2");
+    }
+
+    /**
+     * Rendu textuel du plan pour le prompt de génération de contenu : les
+     * sections à rédiger portent leur {@code id} et une consigne explicite
+     * ("[À rédiger]"/"[Tableau à remplir]"), les titres purement structurels
+     * (qui portent des sous-sections) ne servent que de repères de contexte.
+     * Une section "heading" sans enfant est elle-même une section à rédiger —
+     * c'est un titre feuille, exactement comme dans {@code
+     * DocumentSkeletonHtmlBuilder.appendHeading}.
+     */
+    private void renderContentOutline(List<StructureNode> nodes, StringBuilder sb, int depth) {
+        if (nodes == null) {
+            return;
+        }
+        String indent = "  ".repeat(depth);
+        for (StructureNode node : nodes) {
+            String type = node.getType() == null ? "" : node.getType();
+            switch (type) {
+                case "cover" -> {
+                    // Page de garde : hors contenu à générer.
+                }
+                case "table" -> {
+                    int rows = node.getSuggestedRowCount() == null ? 3 : node.getSuggestedRowCount();
+                    sb.append(indent).append("- [").append(node.getId()).append("] Tableau « ").append(node.getLabel())
+                            .append(" » — colonnes : ").append(String.join(", ", columnsOf(node)))
+                            .append(" — [Tableau à remplir : ").append(rows).append(" lignes]\n");
+                }
+                case "list" -> sb.append(indent).append("- [").append(node.getId()).append("] ")
+                        .append(node.getLabel()).append(" — [À rédiger]\n");
+                case "paragraph_placeholder", "paragraph" -> sb.append(indent).append("- [").append(node.getId())
+                        .append("] ").append(node.getLabel()).append(" — [À rédiger]\n");
+                default -> {
+                    int level = Math.max(1, Math.min(node.getLevel() == null ? 1 : node.getLevel(), 6));
+                    boolean leaf = node.getChildren() == null || node.getChildren().isEmpty();
+                    sb.append(indent).append("#".repeat(level)).append(' ').append(node.getLabel());
+                    if (leaf) {
+                        sb.append(" — [").append(node.getId()).append("] [À rédiger]");
+                    }
+                    sb.append('\n');
+                }
+            }
+            renderContentOutline(node.getChildren(), sb, depth + 1);
+        }
     }
 
     /**

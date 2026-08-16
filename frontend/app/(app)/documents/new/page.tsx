@@ -4,15 +4,17 @@ import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useMutation } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { FilePlus2, FileUp, Loader2, Upload, X } from 'lucide-react';
+import { FilePlus2, FileUp, Loader2, Sparkles, Upload, X } from 'lucide-react';
 import { PageHeader } from '@/components/page-header';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useDocumentTypes } from '@/lib/hooks/queries';
-import { createDocument, importDocument } from '@/lib/api/client';
+import { createDocument, importDocument, generateDocument } from '@/lib/api/client';
 import type { DocumentType } from '@/types';
 
 // Alignée sur le contrôle déjà en place pour l'import de Document Type
@@ -20,31 +22,41 @@ import type { DocumentType } from '@/types';
 const MAX_FILE_SIZE_MB = 25;
 const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
 const ALLOWED_FILE_PATTERN = /\.(docx?|pdf|md|txt)$/i;
+// Même seuil que côté serveur (GenerateDocumentRequest.description, @Size(min = 10)).
+const MIN_DESCRIPTION_LENGTH = 10;
 
 /**
- * Point d'entrée de la rédaction, à deux vitesses :
+ * Point d'entrée de la rédaction, à trois vitesses :
  * - « Depuis un Document Type » : squelette d'un gabarit validé, sections
  *   vides à remplir (flux historique) ;
  * - « Importer un fichier » : un document déjà écrit (.docx/.pdf/.md/.txt)
  *   est converti et ouvert directement dans l'éditeur pour être repris — sans
- *   gabarit, pas de Document Type associé.
- * Les deux mènent au même éditeur type Word (`/documents/{id}`).
+ *   gabarit, pas de Document Type associé ;
+ * - « Générer avec l'IA » : le plan d'un Document Type choisi, rempli par
+ *   l'IA à partir d'une description — même principe que "Générer avec l'IA"
+ *   côté Document Type, mais ici c'est le contenu qui est produit, le plan
+ *   étant déjà fixé par le Document Type sélectionné.
+ * Les trois mènent au même éditeur type Word (`/documents/{id}`).
  */
 export default function NewDocumentPage() {
   return (
     <div className="mx-auto max-w-2xl space-y-6 p-6 lg:p-8">
-      <PageHeader title="Nouveau document" description="Partez d'un Document Type ou importez un fichier existant." icon={FilePlus2} />
+      <PageHeader title="Nouveau document" description="Partez d'un Document Type, importez un fichier existant, ou laissez l'IA rédiger un premier jet." icon={FilePlus2} />
 
       <Tabs defaultValue="template">
-        <TabsList className="grid w-full grid-cols-2">
+        <TabsList className="grid w-full grid-cols-3">
           <TabsTrigger value="template">Depuis un Document Type</TabsTrigger>
           <TabsTrigger value="import">Importer un fichier</TabsTrigger>
+          <TabsTrigger value="generate">Générer avec l&apos;IA</TabsTrigger>
         </TabsList>
         <TabsContent value="template" className="mt-4">
           <FromTemplateTab />
         </TabsContent>
         <TabsContent value="import" className="mt-4">
           <ImportFileTab />
+        </TabsContent>
+        <TabsContent value="generate" className="mt-4">
+          <GenerateWithAiTab />
         </TabsContent>
       </Tabs>
     </div>
@@ -180,6 +192,94 @@ function ImportFileTab() {
           {importMut.isPending
             ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Import en cours…</>
             : <><FileUp className="mr-2 h-4 w-4" /> Importer et ouvrir dans l&apos;éditeur</>}
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Le plan (titres, tableaux) vient du Document Type choisi — l'IA ne rédige
+ * que le contenu de chaque section, jamais la structure. Un appel bloquant
+ * unique (JSON couvrant tout le document) : plus lent qu'un simple "Créer le
+ * document" mais plus cohérent qu'une suite d'appels indépendants section par
+ * section, et le document est créé même si l'IA échoue (squelette vide, comme
+ * "Depuis un Document Type" — jamais d'erreur bloquante).
+ */
+function GenerateWithAiTab() {
+  const router = useRouter();
+  const { data: documentTypes, isLoading } = useDocumentTypes();
+  const [documentTypeId, setDocumentTypeId] = useState('');
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+
+  const activeTypes = (documentTypes ?? []).filter((d: DocumentType) => d.status === 'ACTIF');
+  const canSubmit = !!documentTypeId && name.trim().length > 0 && description.trim().length >= MIN_DESCRIPTION_LENGTH;
+
+  const generateMut = useMutation({
+    mutationFn: async () =>
+      (await generateDocument({ documentTypeId, name: name.trim(), description: description.trim() })).data,
+    onSuccess: (doc) => {
+      toast.success('Contenu généré — relisez-le avant de le finaliser.');
+      router.push(`/documents/${doc.id}`);
+    },
+    onError: (e: Error) => toast.error('La génération a échoué', { description: e.message }),
+  });
+
+  return (
+    <Card>
+      <CardContent className="space-y-4 p-6">
+        <div className="space-y-2">
+          <Label htmlFor="gen-doc-name">Nom du document</Label>
+          <Input
+            id="gen-doc-name"
+            placeholder="Ex. Audit sécurité — siège social"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="gen-doc-type">Document Type</Label>
+          <Select value={documentTypeId} onValueChange={setDocumentTypeId}>
+            <SelectTrigger id="gen-doc-type" aria-label="Document Type">
+              <SelectValue placeholder={isLoading ? 'Chargement…' : 'Sélectionnez un Document Type'} />
+            </SelectTrigger>
+            <SelectContent>
+              {activeTypes.length === 0 && !isLoading ? (
+                <div className="px-2 py-1.5 text-sm text-muted-foreground">Aucun Document Type actif.</div>
+              ) : (
+                activeTypes.map((d: DocumentType) => <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>)
+              )}
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">
+            L&apos;IA respecte le plan de ce Document Type — elle n&apos;en rédige que le contenu.
+          </p>
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="gen-doc-description">Ce que vous souhaitez obtenir</Label>
+          <Textarea
+            id="gen-doc-description"
+            rows={5}
+            placeholder="Ex. Un audit de la sécurité informatique du siège social, réalisé en mars 2026, avec trois constats critiques sur la gestion des accès et des recommandations priorisées."
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+          />
+          <p className="text-xs text-muted-foreground">
+            {description.trim().length}/{MIN_DESCRIPTION_LENGTH} caractères minimum. Plus la description est précise, plus le contenu généré sera pertinent.
+          </p>
+        </div>
+
+        <Button
+          className="w-full bg-accent text-accent-foreground hover:bg-accent/90"
+          disabled={!canSubmit || generateMut.isPending}
+          onClick={() => generateMut.mutate()}
+        >
+          {generateMut.isPending
+            ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Génération en cours (jusqu&apos;à une minute)…</>
+            : <><Sparkles className="mr-2 h-4 w-4" /> Générer le contenu</>}
         </Button>
       </CardContent>
     </Card>
