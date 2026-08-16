@@ -1,25 +1,32 @@
 package com.docuai.export;
 
+import com.docuai.export.DocumentBlocks.Block;
+import com.docuai.export.DocumentBlocks.HeadingBlock;
+import com.docuai.export.DocumentBlocks.ListBlock;
+import com.docuai.export.DocumentBlocks.ListItem;
+import com.docuai.export.DocumentBlocks.ParagraphBlock;
+import com.docuai.export.DocumentBlocks.RuleBlock;
+import com.docuai.export.DocumentBlocks.Segment;
+import com.docuai.export.DocumentBlocks.TableBlock;
+import com.docuai.export.DocumentBlocks.TableCell;
+import com.docuai.export.DocumentBlocks.TableRow;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Pattern;
 
 /**
- * Découpe un contenu Markdown (celui assemblé par
- * {@code GenerationStreamService}, ou édité manuellement côté frontend) en
- * blocs typés — utilisé par {@link DocxDocumentExporter} et
- * {@link PdfDocumentExporter} pour produire un vrai style de titre Word/une
- * taille de police par niveau et un vrai tableau, plutôt que du texte plat.
- * Reconnaît uniquement le sous-ensemble Markdown effectivement produit par
- * l'éditeur de sections du frontend : titres {@code #}..{@code ######},
- * tableaux {@code | a | b |} avec leur ligne de séparation {@code |---|---|},
- * listes à puces ({@code -}) et numérotées ({@code 1.}), filets horizontaux
- * ({@code ---}), le reste en paragraphes (une ligne vide sépare deux
- * paragraphes). À l'intérieur d'un paragraphe, d'un item de liste ou d'une
- * cellule, {@link #inline(String)} découpe les marques {@code **gras**},
- * {@code *italique*}, {@code `code`} et {@code [texte](url)} — sans quoi la
- * barre d'outils de l'éditeur produirait une mise en forme qui ressortirait en
- * caractères Markdown bruts dans le DOCX/PDF.
+ * Découpe un contenu Markdown en {@link DocumentBlocks.Block} — format hérité
+ * du flux d'édition section par section, conservé pour les documents créés
+ * avant l'éditeur type Word (dont le contenu est du HTML, cf.
+ * {@link HtmlContentParser}) et pour l'assemblage serveur des sections.
+ * Reconnaît : titres {@code #}..{@code ######}, tableaux {@code | a | b |}
+ * avec leur ligne de séparation {@code |---|---|}, listes à puces ({@code -})
+ * et numérotées ({@code 1.}), filets horizontaux ({@code ---}), le reste en
+ * paragraphes (une ligne vide sépare deux paragraphes). À l'intérieur d'un
+ * paragraphe, d'un item de liste ou d'une cellule, {@link #inline(String)}
+ * découpe les marques {@code **gras**}, {@code *italique*}, {@code `code`} et
+ * {@code [texte](url)}.
  */
 final class MarkdownContentParser {
 
@@ -36,35 +43,6 @@ final class MarkdownContentParser {
     private MarkdownContentParser() {
     }
 
-    sealed interface Block permits HeadingBlock, ParagraphBlock, TableBlock, ListBlock, RuleBlock {
-    }
-
-    record HeadingBlock(int level, String text) implements Block {
-    }
-
-    record ParagraphBlock(String text) implements Block {
-    }
-
-    record TableBlock(List<List<String>> rows) implements Block {
-    }
-
-    /** {@code depth} = niveau d'imbrication (0 = premier niveau), déduit de l'indentation. */
-    record ListItem(int depth, String text) {
-    }
-
-    record ListBlock(boolean ordered, List<ListItem> items) implements Block {
-    }
-
-    record RuleBlock() implements Block {
-    }
-
-    /** Fragment de texte homogène : {@code href} non nul = lien. */
-    record Segment(String text, boolean bold, boolean italic, boolean code, String href) {
-        static Segment plain(String text) {
-            return new Segment(text, false, false, false, null);
-        }
-    }
-
     static List<Block> parse(String content) {
         List<Block> blocks = new ArrayList<>();
         if (content == null || content.isBlank()) {
@@ -78,15 +56,22 @@ final class MarkdownContentParser {
             var headingMatch = HEADING.matcher(line.strip());
             if (headingMatch.matches()) {
                 flushParagraph(blocks, paragraph);
-                blocks.add(new HeadingBlock(headingMatch.group(1).length(), headingMatch.group(2).strip()));
+                blocks.add(new HeadingBlock(headingMatch.group(1).length(),
+                        inline(headingMatch.group(2).strip()), null));
                 i++;
             } else if (TABLE_ROW.matcher(line.strip()).matches()) {
                 flushParagraph(blocks, paragraph);
-                List<List<String>> rows = new ArrayList<>();
+                List<TableRow> rows = new ArrayList<>();
                 while (i < lines.length && TABLE_ROW.matcher(lines[i].strip()).matches()) {
                     String stripped = lines[i].strip();
                     if (!TABLE_SEPARATOR.matcher(stripped).matches()) {
-                        rows.add(splitCells(stripped));
+                        // Convention Markdown : la première ligne du tableau est
+                        // l'en-tête (c'est ce que produit l'éditeur, et ce que
+                        // les exporteurs mettaient déjà en gras).
+                        boolean header = rows.isEmpty();
+                        rows.add(new TableRow(splitCells(stripped).stream()
+                                .map(cell -> TableCell.of(inline(cell), header))
+                                .toList()));
                     }
                     i++;
                 }
@@ -109,7 +94,7 @@ final class MarkdownContentParser {
                     if (!matcher.matches()) {
                         break;
                     }
-                    items.add(new ListItem(indentDepth(matcher.group(1)), matcher.group(2).strip()));
+                    items.add(new ListItem(indentDepth(matcher.group(1)), inline(matcher.group(2).strip())));
                     i++;
                 }
                 blocks.add(new ListBlock(ordered, items));
@@ -130,7 +115,7 @@ final class MarkdownContentParser {
 
     private static void flushParagraph(List<Block> blocks, StringBuilder paragraph) {
         if (!paragraph.isEmpty()) {
-            blocks.add(new ParagraphBlock(paragraph.toString()));
+            blocks.add(new ParagraphBlock(inline(paragraph.toString()), null));
             paragraph.setLength(0);
         }
     }
@@ -147,7 +132,7 @@ final class MarkdownContentParser {
     /**
      * Découpe un texte en fragments homogènes. Le texte hors marque est
      * conservé tel quel : ce parseur ne cherche pas à couvrir Markdown, juste
-     * les marques que la barre d'outils de l'éditeur sait produire.
+     * les marques que l'éditeur Markdown historique savait produire.
      */
     static List<Segment> inline(String text) {
         List<Segment> segments = new ArrayList<>();
@@ -161,13 +146,13 @@ final class MarkdownContentParser {
                 segments.add(Segment.plain(text.substring(cursor, matcher.start())));
             }
             if (matcher.group("bold") != null) {
-                segments.add(new Segment(matcher.group("bold"), true, false, false, null));
+                segments.add(mark(matcher.group("bold"), true, false, false, null));
             } else if (matcher.group("italic") != null) {
-                segments.add(new Segment(matcher.group("italic"), false, true, false, null));
+                segments.add(mark(matcher.group("italic"), false, true, false, null));
             } else if (matcher.group("code") != null) {
-                segments.add(new Segment(matcher.group("code"), false, false, true, null));
+                segments.add(mark(matcher.group("code"), false, false, true, null));
             } else {
-                segments.add(new Segment(matcher.group("label"), false, false, false, matcher.group("href")));
+                segments.add(mark(matcher.group("label"), false, false, false, matcher.group("href")));
             }
             cursor = matcher.end();
         }
@@ -177,13 +162,13 @@ final class MarkdownContentParser {
         return segments;
     }
 
-    /** Texte débarrassé de ses marques, pour les rendus qui ne savent pas mélanger les polices (cellules de tableau PDF). */
+    private static Segment mark(String text, boolean bold, boolean italic, boolean code, String href) {
+        return new Segment(text, bold, italic, false, false, code, false, false, href, null, null, null, null);
+    }
+
+    /** Texte débarrassé de ses marques, pour les rendus qui ne savent pas mélanger les polices. */
     static String plainText(String text) {
-        StringBuilder sb = new StringBuilder();
-        for (Segment segment : inline(text)) {
-            sb.append(segment.text());
-        }
-        return sb.toString();
+        return DocumentBlocks.plainText(inline(text));
     }
 
     private static List<String> splitCells(String row) {

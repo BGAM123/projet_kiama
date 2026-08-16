@@ -160,6 +160,136 @@
     @apply pointer-events-none float-left h-0 text-muted-foreground;
     content: attr(data-placeholder);
   }
+
+  /*
+   * Éditeur plein document (components/word-editor.tsx). La feuille imite une
+   * page A4 : largeur fixe en centimètres, marges d'impression, fond blanc
+   * quel que soit le thème — l'utilisateur doit voir ce qu'il va exporter, pas
+   * une variante sombre du document.
+   *
+   * Les tailles de police, couleurs et alignements viennent des styles inline
+   * posés par l'éditeur : aucune règle ici ne doit les écraser, sinon l'aperçu
+   * mentirait sur le DOCX/PDF produit.
+   */
+  .word-page {
+    width: 21cm;
+    max-width: 100%;
+    background: #ffffff;
+    color: #111111;
+    padding: 2cm 2.2cm;
+    box-shadow: 0 1px 3px rgb(0 0 0 / 0.12), 0 8px 24px rgb(0 0 0 / 0.08);
+    border-radius: 2px;
+  }
+  .word-page-content {
+    min-height: 22cm;
+    font-family: Calibri, Carlito, "Segoe UI", sans-serif;
+    font-size: 11pt;
+    line-height: 1.5;
+  }
+  .word-page-content h1 {
+    @apply mb-2 mt-6 font-bold first:mt-0;
+    font-size: 20pt;
+  }
+  .word-page-content h2 {
+    @apply mb-2 mt-5 font-bold first:mt-0;
+    font-size: 16pt;
+  }
+  .word-page-content h3 {
+    @apply mb-1.5 mt-4 font-bold first:mt-0;
+    font-size: 14pt;
+  }
+  .word-page-content h4 {
+    @apply mb-1.5 mt-4 font-bold first:mt-0;
+    font-size: 13pt;
+  }
+  .word-page-content h5,
+  .word-page-content h6 {
+    @apply mb-1.5 mt-3 font-bold first:mt-0;
+    font-size: 12pt;
+  }
+  .word-page-content p {
+    @apply mb-2 last:mb-0;
+    /* Un paragraphe vide est une ligne blanche voulue : il doit garder sa hauteur. */
+    min-height: 1em;
+  }
+  .word-page-content ul {
+    @apply mb-2 list-disc space-y-0.5 pl-8;
+  }
+  .word-page-content ol {
+    @apply mb-2 list-decimal space-y-0.5 pl-8;
+  }
+  .word-page-content li > p {
+    @apply mb-0;
+  }
+  .word-page-content a {
+    color: #1155cc;
+    @apply underline underline-offset-2;
+  }
+  .word-page-content code {
+    @apply rounded px-1 py-0.5 font-mono text-[0.9em];
+    background: #f1f1f1;
+  }
+  .word-page-content hr {
+    @apply my-4;
+    border-color: #cccccc;
+  }
+  .word-page-content img {
+    @apply my-2 h-auto max-w-full;
+  }
+  .word-page-content img.ProseMirror-selectednode {
+    @apply outline outline-2 outline-primary;
+  }
+  .word-page-content table {
+    @apply my-3 w-full table-fixed border-collapse;
+  }
+  .word-page-content th,
+  .word-page-content td {
+    border: 1px solid #b0b0b0;
+    @apply px-2 py-1 align-top;
+  }
+  .word-page-content th {
+    background: #f2f2f2;
+    @apply text-left font-semibold;
+  }
+  .word-page-content th > p,
+  .word-page-content td > p {
+    @apply mb-0;
+  }
+  .word-page-content .selectedCell::after {
+    @apply pointer-events-none absolute inset-0 bg-primary/20;
+    content: '';
+  }
+  .word-page-content .selectedCell {
+    @apply relative;
+  }
+  /* Poignée de redimensionnement de colonne fournie par l'extension Table. */
+  .word-page-content .column-resize-handle {
+    @apply absolute -bottom-px -right-0.5 top-0 w-1 bg-primary;
+    pointer-events: none;
+  }
+  /*
+   * Le saut de page n'a pas d'équivalent visuel dans un flux continu : il est
+   * matérialisé par un trait, pour que l'utilisateur sache qu'il en a posé un.
+   */
+  .word-page-content .page-break {
+    @apply my-6 select-none;
+    border-top: 2px dashed #b0b0b0;
+    position: relative;
+  }
+  .word-page-content .page-break::after {
+    @apply absolute left-1/2 -translate-x-1/2 -translate-y-1/2 px-2 text-[10px] uppercase tracking-wide;
+    content: 'Saut de page';
+    background: #ffffff;
+    color: #8a8a8a;
+  }
+  .word-page-content .page-break.ProseMirror-selectednode {
+    border-top-color: hsl(var(--primary));
+  }
+  .word-page-content p.is-editor-empty:first-child::before {
+    @apply pointer-events-none float-left h-0;
+    content: attr(data-placeholder);
+    color: #9a9a9a;
+  }
 }
 
 @layer utilities {

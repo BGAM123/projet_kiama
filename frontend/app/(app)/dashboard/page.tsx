@@ -28,15 +28,14 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { DocumentStatusBadge } from '@/components/status-badge';
-import { useDashboardStats, useDocuments, useDocumentTypes } from '@/lib/hooks/queries';
+import { useDashboardStats, useDocuments } from '@/lib/hooks/queries';
 import { relativeTime } from '@/lib/format';
-import type { AppDocument, DocumentType } from '@/types';
+import type { AppDocument } from '@/types';
 
 const PIE_COLORS = ['hsl(var(--chart-1))', 'hsl(var(--chart-2))', 'hsl(var(--chart-3))', 'hsl(var(--chart-4))', 'hsl(var(--chart-5))'];
 
 export default function DashboardPage() {
   const { data: stats, isLoading: statsLoading } = useDashboardStats();
-  const { data: documentTypes } = useDocumentTypes();
   const { data: documents, isLoading: documentsLoading } = useDocuments();
 
   const recentDocs = useMemo(
@@ -75,7 +74,6 @@ export default function DashboardPage() {
     },
   ];
 
-  const docTypeName = (id: string) => documentTypes?.find((d: DocumentType) => d.id === id)?.name ?? 'Document';
 
   return (
     <div className="mx-auto max-w-7xl space-y-6 p-6 lg:p-8">
@@ -220,7 +218,7 @@ export default function DashboardPage() {
                       <FileText className="h-4 w-4" />
                     </div>
                     <div className="min-w-0">
-                      <p className="truncate text-sm font-medium">{docTypeName(d.documentTypeId)}</p>
+                      <p className="truncate text-sm font-medium">{d.title ?? 'Document'}</p>
                       <p className="truncate text-xs text-muted-foreground">{relativeTime(d.updatedAt ?? d.createdAt)}</p>
                     </div>
                   </div>

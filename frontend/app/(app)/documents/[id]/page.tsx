@@ -8,19 +8,14 @@ import { toast } from 'sonner';
 import {
   ArrowLeft,
   Check,
-  ChevronDown,
   Download,
   FileDown,
   FileText,
   Loader2,
-  Pencil,
-  RefreshCw,
   Save,
 } from 'lucide-react';
-import { PageHeader } from '@/components/page-header';
-import { Card, CardContent } from '@/components/ui/card';
+import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
   DropdownMenu,
@@ -31,133 +26,172 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { DocumentStatusBadge } from '@/components/status-badge';
 import { SectionSuggestionDiff } from '@/components/section-suggestion-diff';
-import { ConfidenceLegend, ConfidencePill } from '@/components/confidence-legend';
-import { RichTextEditor } from '@/components/rich-text-editor';
-import { useDocument, useDocumentTypes } from '@/lib/hooks/queries';
+import { ConfidencePill } from '@/components/confidence-legend';
 import {
-  updateDocumentSection,
-  improveDocumentSection,
-  applySectionSuggestion,
-  rejectSectionSuggestion,
+  WordEditor,
+  type EditorSelection,
+  type OutlineItem,
+  type WordEditorHandle,
+} from '@/components/word-editor';
+import { useDocument } from '@/lib/hooks/queries';
+import {
+  updateDocumentContent,
+  improveDocumentSelection,
   finalizeDocument,
   exportDocumentFile,
   type ExportFormat,
 } from '@/lib/api/client';
-import { sectionStatusLabel } from '@/lib/format';
-import { buildSectionNumbers, confidenceThreshold, formatConfidence } from '@/lib/confidence';
 import { markdownToHtml } from '@/lib/markdown-editor';
-import { buildEmptyTableHtml } from '@/lib/markdown-table';
 import { cn } from '@/lib/utils';
-import type { AppDocument, DocumentSection, DocumentType } from '@/types';
+import type { AppDocument, DocumentSection } from '@/types';
 
-const SECTION_TYPE_LABEL: Record<DocumentSection['type'], string> = {
-  TITLE: 'Titre',
-  SUBTITLE: 'Sous-titre',
-  SUB_SUBTITLE: 'Sous-sous-titre',
-  TABLE: 'Tableau',
-  PARAGRAPH_PLACEHOLDER: 'Paragraphe',
-};
-
-const AUTOSAVE_DEBOUNCE_MS = 1000;
+const AUTOSAVE_DEBOUNCE_MS = 1200;
 
 /**
- * Éditeur de squelette : plan du document à gauche (numérotation hiérarchique,
- * pastille de confiance par section, score global), sections dépliables à
- * droite. Une seule section est ouverte à la fois — c'est ce qui permet de
- * garder l'éditeur riche monté sur une seule section, et donc une sauvegarde
- * sans ambiguïté sur ce qui est en cours d'édition.
+ * Rédaction d'un document : le squelette du Document Type choisi s'ouvre
+ * directement dans un éditeur type Word, se modifie librement (mise en forme,
+ * tableaux, images) et s'exporte en DOCX ou PDF.
+ *
+ * Le sommaire de gauche est construit à partir des titres réellement présents
+ * dans le document — pas d'une liste de sections figée : renommer un titre dans
+ * l'éditeur le renomme dans le sommaire, en ajouter un l'y fait apparaître.
  */
 export default function DocumentEditPage() {
   const params = useParams<{ id: string }>();
   const qc = useQueryClient();
   const { data: doc, isLoading } = useDocument(params.id);
-  const { data: documentTypes } = useDocumentTypes();
-  const [openId, setOpenId] = useState<string | null>(null);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  /** Vidage immédiat de l'éditeur ouvert, appelé par le bouton "Sauvegarder" et avant la finalisation. */
-  const flushRef = useRef<(() => Promise<void>) | null>(null);
 
-  const sections = useMemo(() => [...(doc?.sections ?? [])].sort((a, b) => a.order - b.order), [doc]);
-  const numbers = useMemo(() => buildSectionNumbers(sections), [sections]);
+  const editorRef = useRef<WordEditorHandle>(null);
+  const pendingRef = useRef<string | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [outline, setOutline] = useState<OutlineItem[]>([]);
+  const [activePos, setActivePos] = useState<number | null>(null);
+  const [savedAt, setSavedAt] = useState<string | null>(null);
+  const [dirty, setDirty] = useState(false);
 
-  useEffect(() => {
-    if (!openId && sections.length > 0) setOpenId(sections[0].id);
-  }, [sections, openId]);
+  /**
+   * Capturé une seule fois : l'éditeur possède son propre état à partir de ce
+   * HTML initial. Le réinjecter à chaque réponse serveur remonterait le
+   * composant et ferait sauter le curseur en pleine frappe.
+   */
+  const initialHtmlRef = useRef<string | null>(null);
+  if (doc && initialHtmlRef.current === null) {
+    initialHtmlRef.current = initialHtmlOf(doc);
+  }
 
-  const docType = documentTypes?.find((d: DocumentType) => d.id === doc?.documentTypeId);
-  const writtenCount = sections.filter((s) => s.status !== 'EMPTY').length;
-  const progress = sections.length ? Math.round((100 * writtenCount) / sections.length) : 0;
-  const globalConfidence = doc?.globalConfidenceScore;
-  const globalThreshold = confidenceThreshold(globalConfidence);
+  // Résolu côté serveur (nom du Document Type, ou nom du fichier importé
+  // quand le document n'en a pas) — jamais recalculé côté client.
+  const title = doc?.title ?? 'Document';
 
-  // Identité stable : `SectionCard` s'enregistre dans un effet, une nouvelle
-  // fonction à chaque rendu le ferait se désenregistrer/réenregistrer en boucle.
-  const registerFlush = useCallback((flush: (() => Promise<void>) | null) => {
-    flushRef.current = flush;
-  }, []);
+  const save = useCallback(async () => {
+    if (pendingRef.current === null) return;
+    const html = pendingRef.current;
+    pendingRef.current = null;
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    await updateDocumentContent(params.id, html);
+    // Le cache n'est délibérément pas réécrit avec la réponse : `doc` ne doit
+    // pas changer d'identité pendant l'édition, sous peine de remonter
+    // l'éditeur (cf. initialHtmlRef).
+    setSavedAt(new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }));
+    setDirty(false);
+  }, [params.id]);
 
-  const patchSectionInCache = useCallback(
-    (updated: DocumentSection) => {
-      qc.setQueryData<AppDocument>(['document', params.id], (old: AppDocument | undefined) =>
-        old ? { ...old, sections: old.sections.map((s: DocumentSection) => (s.id === updated.id ? updated : s)) } : old,
-      );
+  const handleChange = useCallback(
+    (html: string) => {
+      pendingRef.current = html;
+      setDirty(true);
+      if (timerRef.current) clearTimeout(timerRef.current);
+      timerRef.current = setTimeout(() => {
+        save().catch((e: Error) =>
+          toast.error('Échec de la sauvegarde automatique', { description: e.message }),
+        );
+      }, AUTOSAVE_DEBOUNCE_MS);
     },
-    [qc, params.id],
+    [save],
   );
 
-  const improveMutation = useMutation({
-    mutationFn: async (sectionId: string) => (await improveDocumentSection(params.id, sectionId)).data,
-    onSuccess: (result, sectionId) => {
-      const current = sections.find((s) => s.id === sectionId);
-      if (current) {
-        patchSectionInCache({
-          ...current,
-          aiSuggestedContent: result.aiSuggestedContent,
-          confidenceScore: result.confidenceScore,
-        });
+  // Une sauvegarde en attente au démontage serait perdue en silence.
+  useEffect(
+    () => () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+      if (pendingRef.current !== null) {
+        updateDocumentContent(params.id, pendingRef.current).catch(() => undefined);
       }
-      toast.success('Nouvelle proposition IA — comparez avant d\'accepter.');
     },
-    onError: (e: Error) => toast.error('La régénération a échoué', { description: e.message }),
-  });
+    [params.id],
+  );
 
-  const applyMutation = useMutation({
-    mutationFn: async (sectionId: string) => (await applySectionSuggestion(params.id, sectionId)).data,
-    onSuccess: (updated) => {
-      patchSectionInCache(updated);
-      toast.success('Suggestion acceptée.');
-    },
-    onError: (e: Error) => toast.error("Impossible d'accepter la suggestion", { description: e.message }),
-  });
-
-  const rejectMutation = useMutation({
-    mutationFn: async (sectionId: string) => (await rejectSectionSuggestion(params.id, sectionId)).data,
-    onSuccess: (updated) => patchSectionInCache(updated),
-  });
-
-  const finalizeMutation = useMutation({
-    mutationFn: async () => {
-      await flushRef.current?.();
-      return (await finalizeDocument(params.id)).data;
-    },
-    onSuccess: (updated) => {
-      qc.setQueryData(['document', params.id], updated);
-      toast.success('Génération validée — vous pouvez exporter le document.');
-    },
-    onError: (e: Error) => toast.error('La validation a échoué', { description: e.message }),
-  });
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (event: BeforeUnloadEvent) => event.preventDefault();
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [dirty]);
 
   const saveMutation = useMutation({
-    mutationFn: async () => {
-      await flushRef.current?.();
-    },
+    mutationFn: save,
     onSuccess: () => toast.success('Document sauvegardé.'),
     onError: (e: Error) => toast.error('La sauvegarde a échoué', { description: e.message }),
   });
 
+  const finalizeMutation = useMutation({
+    mutationFn: async () => {
+      await save();
+      return (await finalizeDocument(params.id)).data;
+    },
+    onSuccess: (updated) => {
+      qc.setQueryData<AppDocument>(['document', params.id], (old: AppDocument | undefined) =>
+        // `contentHtml` volontairement repris de l'état local : la réponse
+        // serveur est identique, mais la remplacer ferait changer l'identité
+        // du HTML initial de l'éditeur.
+        old ? { ...updated, contentHtml: old.contentHtml } : updated,
+      );
+      toast.success('Document validé — vous pouvez l\'exporter.');
+    },
+    onError: (e: Error) => toast.error('La validation a échoué', { description: e.message }),
+  });
+
+  /**
+   * Suggestion IA en attente de décision. Ses bornes sont celles de la
+   * sélection au moment de la demande : c'est ce qui permet de l'appliquer au
+   * bon endroit même si le curseur a bougé pendant la comparaison.
+   */
+  const [suggestion, setSuggestion] = useState<
+    { selection: EditorSelection; text: string; confidence?: number } | null
+  >(null);
+
+  const improveMutation = useMutation({
+    mutationFn: async (selection: EditorSelection) => ({
+      selection,
+      result: (await improveDocumentSelection(params.id, selection.text)).data,
+    }),
+    onSuccess: ({ selection, result }) =>
+      setSuggestion({
+        selection,
+        text: result.aiSuggestedContent,
+        confidence: result.confidenceScore,
+      }),
+    onError: (e: Error) => toast.error("L'amélioration IA a échoué", { description: e.message }),
+  });
+
+  function acceptSuggestion() {
+    if (!suggestion) return;
+    const { from, to } = suggestion.selection;
+    editorRef.current?.replaceRange(from, to, suggestion.text);
+    setSuggestion(null);
+    toast.success('Suggestion appliquée.');
+  }
+
   const exportMutation = useMutation({
     mutationFn: async (format: ExportFormat) => {
-      await flushRef.current?.();
+      // L'export est réassemblé côté serveur depuis le contenu stocké : sans
+      // ce vidage, un paragraphe écrit il y a moins d'une seconde manquerait
+      // dans le fichier téléchargé.
+      pendingRef.current = editorRef.current?.getHtml() ?? pendingRef.current;
+      await save();
       return { blob: await exportDocumentFile(params.id, format), format };
     },
     onSuccess: ({ blob, format }) => {
@@ -165,7 +199,7 @@ export default function DocumentEditPage() {
       const url = URL.createObjectURL(blob);
       const link = window.document.createElement('a');
       link.href = url;
-      link.download = `${docType?.name ?? 'document'}.${extension}`;
+      link.download = `${title}.${extension}`;
       link.click();
       URL.revokeObjectURL(url);
       toast.success(`Export ${format} terminé.`);
@@ -173,20 +207,16 @@ export default function DocumentEditPage() {
     onError: (e: Error) => toast.error("L'export a échoué", { description: e.message }),
   });
 
-  function selectSection(id: string) {
-    setOpenId((current) => (current === id ? null : id));
-    setEditingId(null);
-    // La carte peut être hors écran quand la sélection vient du plan.
-    requestAnimationFrame(() => {
-      window.document.getElementById(`section-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    });
+  function goToHeading(item: OutlineItem) {
+    setActivePos(item.pos);
+    editorRef.current?.goTo(item.pos);
   }
 
   if (isLoading) {
     return (
-      <div className="mx-auto max-w-7xl space-y-6 p-6 lg:p-8">
+      <div className="space-y-4 p-6 lg:p-8">
         <Skeleton className="h-12 w-full" />
-        <Skeleton className="h-96 w-full" />
+        <Skeleton className="h-[70vh] w-full" />
       </div>
     );
   }
@@ -203,346 +233,160 @@ export default function DocumentEditPage() {
   }
 
   return (
-    <div className="mx-auto flex max-w-7xl flex-col gap-4 p-6 lg:p-8">
-      <PageHeader
-        title="Éditeur de squelette"
-        description={docType?.name ?? 'Document'}
-        actions={
-          <div className="flex items-center gap-2">
-            <Button asChild variant="ghost" size="sm">
-              <Link href="/history">
-                <ArrowLeft className="mr-2 h-4 w-4" /> Historique
-              </Link>
-            </Button>
-            <Button variant="outline" size="sm" disabled={saveMutation.isPending} onClick={() => saveMutation.mutate()}>
-              {saveMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
-              Sauvegarder
-            </Button>
-            <Button
-              size="sm"
-              className="bg-accent text-accent-foreground hover:bg-accent/90"
-              disabled={finalizeMutation.isPending || doc.status === 'FINALISE'}
-              onClick={() => finalizeMutation.mutate()}
-            >
-              {finalizeMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Check className="mr-2 h-4 w-4" />}
-              {doc.status === 'FINALISE' ? 'Génération validée' : 'Valider la génération'}
-            </Button>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" disabled={exportMutation.isPending}>
-                  {exportMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileDown className="mr-2 h-4 w-4" />}
-                  Exporter
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={() => exportMutation.mutate('DOCX')}>
-                  <FileDown className="mr-2 h-4 w-4" /> DOCX (Word)
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => exportMutation.mutate('PDF')}>
-                  <FileDown className="mr-2 h-4 w-4" /> PDF
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => exportMutation.mutate('Markdown')}>
-                  <FileDown className="mr-2 h-4 w-4" /> Markdown
-                </DropdownMenuItem>
-                {doc.exportUrl && (
-                  <>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem asChild>
-                      <a href={doc.exportUrl} target="_blank" rel="noopener noreferrer">
-                        <Download className="mr-2 h-4 w-4" /> Version archivée (DOCX)
-                      </a>
-                    </DropdownMenuItem>
-                  </>
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-        }
-      />
+    <div className="flex h-[calc(100vh-4rem)] flex-col gap-3 p-4 lg:p-6">
+      <header className="flex flex-wrap items-center gap-2">
+        <Button asChild variant="ghost" size="sm">
+          <Link href="/history">
+            <ArrowLeft className="mr-2 h-4 w-4" /> Historique
+          </Link>
+        </Button>
+        <FileText className="h-5 w-5 text-primary" />
+        <h1 className="truncate text-base font-semibold">{title}</h1>
+        <DocumentStatusBadge status={doc.status} />
+        <span className="text-xs text-muted-foreground">
+          {dirty ? 'Modifications non enregistrées…' : savedAt ? `Enregistré à ${savedAt}` : 'Sauvegarde automatique active'}
+        </span>
 
-      <ConfidenceLegend />
+        <div className="ml-auto flex items-center gap-2">
+          <Button variant="outline" size="sm" disabled={saveMutation.isPending} onClick={() => saveMutation.mutate()}>
+            {saveMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+            Sauvegarder
+          </Button>
+          <Button
+            size="sm"
+            className="bg-accent text-accent-foreground hover:bg-accent/90"
+            disabled={finalizeMutation.isPending || doc.status === 'FINALISE'}
+            onClick={() => finalizeMutation.mutate()}
+          >
+            {finalizeMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Check className="mr-2 h-4 w-4" />}
+            {doc.status === 'FINALISE' ? 'Document validé' : 'Valider le document'}
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm" disabled={exportMutation.isPending}>
+                {exportMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileDown className="mr-2 h-4 w-4" />}
+                Exporter
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => exportMutation.mutate('DOCX')}>
+                <FileDown className="mr-2 h-4 w-4" /> Word (.docx)
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => exportMutation.mutate('PDF')}>
+                <FileDown className="mr-2 h-4 w-4" /> PDF (.pdf)
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => exportMutation.mutate('Markdown')}>
+                <FileDown className="mr-2 h-4 w-4" /> Markdown (.md)
+              </DropdownMenuItem>
+              {doc.exportUrl && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem asChild>
+                    <a href={doc.exportUrl} target="_blank" rel="noopener noreferrer">
+                      <Download className="mr-2 h-4 w-4" /> Version archivée (DOCX)
+                    </a>
+                  </DropdownMenuItem>
+                </>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </header>
 
-      <div className="grid gap-4 lg:h-[calc(100vh-19rem)] lg:min-h-[32rem] lg:grid-cols-[280px_1fr]">
-        {/* Plan du document */}
-        <Card className="flex flex-col overflow-hidden">
-          <div className="space-y-2 border-b border-border p-4">
+      <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-[248px_1fr]">
+        <Card className="hidden min-h-0 flex-col overflow-hidden lg:flex">
+          <div className="border-b border-border px-3 py-2">
             <p className="text-sm font-medium">Plan du document</p>
-            <div className="flex items-center gap-2">
-              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
-                <div
-                  className={cn('h-full rounded-full transition-all', globalThreshold.dot)}
-                  style={{ width: `${globalConfidence ?? 0}%` }}
-                />
-              </div>
-              <span className={cn('text-xs font-semibold', globalThreshold.text)}>{formatConfidence(globalConfidence)}</span>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Score de confiance global
-              {globalConfidence === undefined && ' — aucune section évaluée par l\'IA'}
-            </p>
-            <p className="text-xs text-muted-foreground">
-              {writtenCount}/{sections.length} sections rédigées ({progress} %)
-            </p>
+            <p className="text-xs text-muted-foreground">Construit à partir des titres</p>
           </div>
-          <div className="scrollbar-thin flex-1 overflow-y-auto p-2">
-            {sections.map((section) => {
-              const threshold = confidenceThreshold(section.confidenceScore);
-              return (
+          <nav className="scrollbar-thin flex-1 overflow-y-auto p-2">
+            {outline.length === 0 ? (
+              <p className="px-2 py-4 text-xs text-muted-foreground">
+                Aucun titre — utilisez les styles « Titre 1 » à « Titre 6 » pour structurer le document.
+              </p>
+            ) : (
+              outline.map((item) => (
                 <button
-                  key={section.id}
+                  key={item.pos}
                   type="button"
-                  onClick={() => selectSection(section.id)}
+                  onClick={() => goToHeading(item)}
+                  style={{ paddingLeft: `${0.5 + (item.level - 1) * 0.6}rem` }}
                   className={cn(
-                    'mb-0.5 flex w-full items-center gap-2 rounded-md px-2 py-2 text-left transition-colors hover:bg-muted/60',
-                    openId === section.id && 'border-l-[3px] border-primary bg-primary/10',
+                    'mb-0.5 block w-full truncate rounded-md py-1.5 pr-2 text-left text-xs transition-colors hover:bg-muted/60',
+                    item.level === 1 && 'font-semibold',
+                    activePos === item.pos && 'border-l-[3px] border-primary bg-primary/10',
                   )}
                 >
-                  <span className="w-8 flex-none text-[10px] font-bold text-muted-foreground">{numbers.get(section.id)}</span>
-                  <span className="flex-1 truncate text-xs">{section.label}</span>
-                  <span
-                    className={cn('h-2.5 w-2.5 flex-none rounded-[3px]', threshold.dot)}
-                    title={`${threshold.interpretation} — ${formatConfidence(section.confidenceScore)}`}
-                  />
+                  {item.text || 'Titre sans texte'}
                 </button>
-              );
-            })}
-          </div>
+              ))
+            )}
+          </nav>
         </Card>
 
-        {/* Corps de l'éditeur */}
-        <Card className="flex flex-col overflow-hidden">
-          <div className="flex items-center gap-2 border-b border-border p-3">
-            <FileText className="h-5 w-5 text-primary" />
-            <span className="flex-1 truncate text-sm font-semibold">{docType?.name ?? 'Document'}</span>
-            <DocumentStatusBadge status={doc.status} />
-          </div>
-          <div className="scrollbar-thin flex-1 space-y-3 overflow-y-auto p-4">
-            {sections.length === 0 && (
-              <p className="py-8 text-center text-sm text-muted-foreground">
-                Ce document n&apos;a aucune section — vérifiez la structure du Document Type.
-              </p>
-            )}
-            {sections.map((section) => (
-              <SectionCard
-                key={section.id}
-                documentId={params.id}
-                section={section}
-                number={numbers.get(section.id) ?? ''}
-                open={openId === section.id}
-                editing={editingId === section.id}
-                onToggle={() => selectSection(section.id)}
-                onToggleEditing={() => setEditingId((current) => (current === section.id ? null : section.id))}
-                onSaved={patchSectionInCache}
-                registerFlush={registerFlush}
-                onRegenerate={() => improveMutation.mutate(section.id)}
-                regenerating={improveMutation.isPending && improveMutation.variables === section.id}
-                onAccept={() => applyMutation.mutate(section.id)}
-                onReject={() => rejectMutation.mutate(section.id)}
-                accepting={applyMutation.isPending && applyMutation.variables === section.id}
+        <div className="flex min-h-0 flex-col gap-3">
+          <Card className="min-h-0 flex-1 overflow-hidden">
+            <WordEditor
+              ref={editorRef}
+              key={doc.id}
+              initialHtml={initialHtmlRef.current ?? '<p></p>'}
+              onChange={handleChange}
+              onOutlineChange={setOutline}
+              onError={(message) => toast.error('Insertion impossible', { description: message })}
+              onImproveSelection={(selection) => improveMutation.mutate(selection)}
+              improving={improveMutation.isPending}
+            />
+          </Card>
+
+          {suggestion && (
+            <div className="shrink-0 space-y-1">
+              {suggestion.confidence !== undefined && (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  Confiance auto-déclarée du modèle <ConfidencePill score={suggestion.confidence} />
+                </div>
+              )}
+              <SectionSuggestionDiff
+                before={suggestion.selection.text}
+                after={suggestion.text}
+                onAccept={acceptSuggestion}
+                onReject={() => setSuggestion(null)}
               />
-            ))}
-          </div>
-        </Card>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
 }
 
-function SectionCard({
-  documentId,
-  section,
-  number,
-  open,
-  editing,
-  onToggle,
-  onToggleEditing,
-  onSaved,
-  registerFlush,
-  onRegenerate,
-  regenerating,
-  onAccept,
-  onReject,
-  accepting,
-}: {
-  documentId: string;
-  section: DocumentSection;
-  number: string;
-  open: boolean;
-  editing: boolean;
-  onToggle: () => void;
-  onToggleEditing: () => void;
-  onSaved: (updated: DocumentSection) => void;
-  registerFlush: (flush: (() => Promise<void>) | null) => void;
-  onRegenerate: () => void;
-  regenerating: boolean;
-  onAccept: () => void;
-  onReject: () => void;
-  accepting: boolean;
-}) {
-  const [savedAt, setSavedAt] = useState<string | null>(null);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingRef = useRef<string | null>(null);
-  const isTable = section.type === 'TABLE';
-
-  const flush = useCallback(async () => {
-    if (pendingRef.current === null) return;
-    const content = pendingRef.current;
-    pendingRef.current = null;
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-    try {
-      const res = await updateDocumentSection(documentId, section.id, content);
-      onSaved(res.data);
-      setSavedAt(new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }));
-    } catch (e) {
-      toast.error('Échec de la sauvegarde automatique', { description: e instanceof Error ? e.message : undefined });
-    }
-  }, [documentId, section.id, onSaved]);
-
-  // Le bouton "Sauvegarder" de l'en-tête doit vider l'éditeur réellement ouvert :
-  // seule la section en cours d'édition s'enregistre comme cible.
-  useEffect(() => {
-    if (!editing) return;
-    registerFlush(flush);
-    return () => {
-      flush();
-      registerFlush(null);
-    };
-  }, [editing, flush, registerFlush]);
-
-  const handleChange = useCallback(
-    (markdown: string) => {
-      pendingRef.current = markdown;
-      if (timerRef.current) clearTimeout(timerRef.current);
-      timerRef.current = setTimeout(() => {
-        flush();
-      }, AUTOSAVE_DEBOUNCE_MS);
-    },
-    [flush],
-  );
-
-  // Une section TABLE s'édite comme un vrai tableau : celui déjà rempli, ou un
-  // tableau vide dont l'en-tête reprend les colonnes attendues du Document Type.
-  const initialHtml = isTable
-    ? markdownToHtml(section.userContent) || buildEmptyTableHtml(section.tableColumns)
-    : markdownToHtml(section.userContent);
-
-  const hasSuggestion = Boolean(section.aiSuggestedContent);
-  const hasContent = Boolean(section.userContent?.trim());
-
-  return (
-    <div
-      id={`section-${section.id}`}
-      className={cn('rounded-lg border transition-colors', open ? 'border-primary' : 'border-border hover:border-primary/50')}
-    >
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={open}
-        className="flex w-full items-center gap-3 p-3 text-left"
-      >
-        <span className="w-8 flex-none text-[11px] font-bold text-muted-foreground">{number}.</span>
-        <span className="flex-1 truncate text-sm font-semibold">{section.label}</span>
-        <Badge variant="outline" className="hidden font-normal sm:inline-flex">
-          {SECTION_TYPE_LABEL[section.type]}
-        </Badge>
-        <ConfidencePill score={section.confidenceScore} />
-        <ChevronDown className={cn('h-4 w-4 flex-none text-muted-foreground transition-transform', open && 'rotate-180')} />
-      </button>
-
-      {open && (
-        <div className="space-y-3 border-t border-border p-3">
-          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-            <span>{sectionStatusLabel[section.status]}</span>
-            {savedAt && (
-              <span className="flex items-center gap-1">
-                <Save className="h-3 w-3" /> Enregistré à {savedAt}
-              </span>
-            )}
-            {editing && !savedAt && <span>Sauvegarde automatique active</span>}
-          </div>
-
-          {editing ? (
-            <RichTextEditor
-              key={section.id}
-              variant={isTable ? 'table' : 'prose'}
-              initialHtml={initialHtml}
-              placeholder={
-                isTable
-                  ? 'Remplissez les lignes du tableau…'
-                  : 'Rédigez le contenu de cette section…'
-              }
-              onChange={handleChange}
-              onBlur={flush}
-            />
-          ) : (
-            <SectionPreview markdown={section.userContent} />
-          )}
-
-          <div className="flex flex-wrap gap-2">
-            <Button type="button" variant="outline" size="sm" disabled={!hasSuggestion || accepting} onClick={onAccept}>
-              {accepting ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Check className="mr-1.5 h-3.5 w-3.5" />}
-              Accepter
-            </Button>
-            {/* "Régénérer" reformule le contenu déjà écrit : sans texte de départ, l'IA n'aurait rien à reprendre. */}
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={regenerating || !hasContent || isTable}
-              title={
-                isTable
-                  ? "L'amélioration IA reformule de la prose et casserait la syntaxe du tableau."
-                  : hasContent
-                    ? undefined
-                    : 'Rédigez d\'abord un contenu à reformuler.'
-              }
-              onClick={onRegenerate}
-            >
-              {regenerating ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1.5 h-3.5 w-3.5" />}
-              Régénérer
-            </Button>
-            <Button type="button" variant={editing ? 'secondary' : 'outline'} size="sm" onClick={onToggleEditing}>
-              <Pencil className="mr-1.5 h-3.5 w-3.5" />
-              {editing ? 'Terminer' : 'Modifier'}
-            </Button>
-          </div>
-
-          {section.aiSuggestedContent && (
-            <SectionSuggestionDiff
-              before={section.userContent ?? ''}
-              after={section.aiSuggestedContent}
-              onAccept={onAccept}
-              onReject={onReject}
-              pending={accepting}
-            />
-          )}
-        </div>
-      )}
-    </div>
-  );
+/**
+ * Contenu à ouvrir dans l'éditeur. Les documents créés avant celui-ci n'ont pas
+ * de `contentHtml` : leur contenu, réparti en Markdown section par section, est
+ * reconstitué en HTML pour qu'ils restent modifiables et exportables au lieu de
+ * s'ouvrir vides.
+ */
+function initialHtmlOf(doc: AppDocument): string {
+  if (doc.contentHtml && doc.contentHtml.trim()) {
+    return doc.contentHtml;
+  }
+  const sections = [...(doc.sections ?? [])].sort((a, b) => a.order - b.order);
+  const html = sections.map(legacySectionToHtml).join('');
+  return html || '<p></p>';
 }
 
-/**
- * Aperçu du contenu retenu. Le Markdown est rendu en HTML par
- * {@link markdownToHtml}, qui échappe tout le texte et ne produit que ses
- * propres balises — rien de ce que contient la section n'est interprété comme
- * du HTML.
- */
-function SectionPreview({ markdown }: { markdown?: string }) {
-  if (!markdown?.trim()) {
-    return (
-      <p className="rounded-md border border-dashed border-border p-4 text-center text-sm text-muted-foreground">
-        Section vide — cliquez sur « Modifier » pour la rédiger.
-      </p>
-    );
-  }
-  return (
-    <div
-      className="prose-editor max-w-none rounded-md border border-border p-3 text-sm [&_table]:w-full [&_table]:border-collapse [&_th]:border [&_th]:border-border [&_th]:bg-muted [&_th]:px-3 [&_th]:py-1.5 [&_th]:text-left [&_td]:border [&_td]:border-border [&_td]:px-3 [&_td]:py-1.5"
-      dangerouslySetInnerHTML={{ __html: markdownToHtml(markdown) }}
-    />
-  );
+const LEGACY_HEADING_TAG: Partial<Record<DocumentSection['type'], string>> = {
+  TITLE: 'h1',
+  SUBTITLE: 'h2',
+  SUB_SUBTITLE: 'h3',
+};
+
+function legacySectionToHtml(section: DocumentSection): string {
+  const tag = LEGACY_HEADING_TAG[section.type];
+  const label = escapeHtml(section.label);
+  const body = markdownToHtml(section.userContent) || '<p></p>';
+  return tag ? `<${tag}>${label}</${tag}>${body}` : body;
+}
+
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }

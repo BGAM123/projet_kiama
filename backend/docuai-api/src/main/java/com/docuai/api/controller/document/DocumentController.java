@@ -4,7 +4,9 @@ import com.docuai.api.dto.ApiResponse;
 import com.docuai.api.dto.CreateDocumentRequest;
 import com.docuai.api.dto.DocumentDTO;
 import com.docuai.api.dto.DocumentSectionDTO;
+import com.docuai.api.dto.ImproveTextRequest;
 import com.docuai.api.dto.SectionSuggestionDTO;
+import com.docuai.api.dto.UpdateDocumentContentRequest;
 import com.docuai.api.dto.UpdateSectionContentRequest;
 import com.docuai.api.service.DocumentSectionService;
 import com.docuai.api.service.DocumentService;
@@ -20,6 +22,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 import java.util.UUID;
@@ -55,6 +58,24 @@ public class DocumentController {
         return ResponseEntity.ok(ApiResponse.success(documentService.create(request, principal.getUtilisateur())));
     }
 
+    /**
+     * Second point d'entrée de la rédaction, à côté de {@link #create} :
+     * l'utilisateur dépose un fichier existant (.docx/.pdf/.md/.txt/.doc) et
+     * le retrouve directement éditable dans l'éditeur type Word, sans passer
+     * par un Document Type. Même autorité que {@code POST /documents} —
+     * accessible à tout utilisateur autorisé à générer un document, pas
+     * réservé aux administrateurs (contrairement à l'import qui crée un
+     * Document Type, {@code DOCUMENT_TYPE_IMPORT}).
+     */
+    @PostMapping(value = "/import", consumes = "multipart/form-data")
+    @PreAuthorize("hasAuthority('DOCUMENT_GENERATE')")
+    @Operation(summary = "Importer un fichier existant et l'ouvrir directement dans l'éditeur type Word")
+    public ResponseEntity<ApiResponse<DocumentDTO>> importDocument(
+            @RequestParam("file") MultipartFile file,
+            @AuthenticationPrincipal UserDetailsImpl principal) {
+        return ResponseEntity.ok(ApiResponse.success(documentService.importDocument(file, principal.getUtilisateur())));
+    }
+
     @GetMapping
     @PreAuthorize("hasAnyAuthority('HISTORY_READ_OWN', 'HISTORY_READ_ALL')")
     @Operation(summary = "Lister les documents d'un utilisateur")
@@ -71,6 +92,28 @@ public class DocumentController {
                                                               @AuthenticationPrincipal UserDetailsImpl principal) {
         return ResponseEntity.ok(ApiResponse.success(
                 documentService.getById(id, principal.getUtilisateur().getId(), isAdmin(principal))));
+    }
+
+    @PutMapping("/{id}/content")
+    @PreAuthorize("hasAuthority('DOCUMENT_EDIT_OWN')")
+    @Operation(summary = "Sauvegarder le document mis en forme dans l'éditeur type Word (autosave)")
+    public ResponseEntity<ApiResponse<DocumentDTO>> saveContent(
+            @PathVariable UUID id,
+            @RequestBody UpdateDocumentContentRequest request,
+            @AuthenticationPrincipal UserDetailsImpl principal) {
+        return ResponseEntity.ok(ApiResponse.success(documentService.saveContent(
+                id, request.getContentHtml(), principal.getUtilisateur().getId(), isAdmin(principal))));
+    }
+
+    @PostMapping("/{id}/improve-selection")
+    @PreAuthorize("hasAuthority('DOCUMENT_EDIT_OWN')")
+    @Operation(summary = "Demander une amélioration IA du passage sélectionné dans l'éditeur (suggestion retournée sans être appliquée)")
+    public ResponseEntity<ApiResponse<SectionSuggestionDTO>> improveSelection(
+            @PathVariable UUID id,
+            @Valid @RequestBody ImproveTextRequest request,
+            @AuthenticationPrincipal UserDetailsImpl principal) {
+        return ResponseEntity.ok(ApiResponse.success(documentService.improveSelection(
+                id, request.getText(), principal.getUtilisateur().getId(), isAdmin(principal))));
     }
 
     @PutMapping("/{id}/sections/{sectionId}")

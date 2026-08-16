@@ -708,12 +708,14 @@ function adaptDocumentSectionDTO(dto: BackendDocumentSectionDTO): DocumentSectio
 
 interface BackendDocumentDTO {
   id: string;
-  documentTypeId: string;
+  documentTypeId?: string | null;
   userId: string;
   status: string;
   language: string;
   tone: string;
+  title?: string | null;
   sections?: BackendDocumentSectionDTO[] | null;
+  contentHtml?: string | null;
   globalConfidenceScore?: number | null;
   createdAt: string;
   updatedAt?: string | null;
@@ -723,12 +725,14 @@ interface BackendDocumentDTO {
 function adaptDocumentDTO(dto: BackendDocumentDTO): AppDocument {
   return {
     id: dto.id,
-    documentTypeId: dto.documentTypeId,
+    documentTypeId: dto.documentTypeId ?? undefined,
     userId: dto.userId,
     status: dto.status as AppDocument['status'],
     language: dto.language as AppDocument['language'],
     tone: dto.tone as AppDocument['tone'],
+    title: dto.title ?? undefined,
     sections: (dto.sections ?? []).map(adaptDocumentSectionDTO),
+    contentHtml: dto.contentHtml ?? undefined,
     globalConfidenceScore: dto.globalConfidenceScore ?? undefined,
     createdAt: dto.createdAt,
     updatedAt: dto.updatedAt ?? undefined,
@@ -742,6 +746,25 @@ export async function createDocument(documentTypeId: string): Promise<ApiSuccess
     return ok(adaptDocumentDTO(res.data.data));
   } catch (e) {
     throw toApiError(e, '/api/v1/documents');
+  }
+}
+
+/**
+ * Second point d'entrée de la rédaction : importe un fichier existant
+ * (.docx/.pdf/.md/.txt/.doc) et le renvoie directement éditable dans
+ * l'éditeur type Word, sans passer par un Document Type. Le .docx conserve sa
+ * mise en forme (gras, couleurs, tableaux, images…) ; les autres formats sont
+ * reformés en paragraphes de texte brut.
+ */
+export async function importDocument(file: File): Promise<ApiSuccess<AppDocument>> {
+  try {
+    const form = new FormData();
+    // Ne PAS fixer le header Content-Type manuellement, cf. uploadAndExtractDocument.
+    form.append('file', file);
+    const res = await http.post<{ data: BackendDocumentDTO }>('/documents/import', form);
+    return ok(adaptDocumentDTO(res.data.data));
+  } catch (e) {
+    throw toApiError(e, '/api/v1/documents/import');
   }
 }
 
@@ -763,13 +786,47 @@ export async function getDocument(id: string): Promise<ApiSuccess<AppDocument>> 
   }
 }
 
-/** Autosave — voir hook `useDebouncedSectionSave` (frontend/app/(app)/documents/[id]/page.tsx) pour la stratégie de debounce. */
+/**
+ * Sauvegarde du document mis en forme dans l'éditeur type Word (autosave
+ * debouncée, cf. app/(app)/documents/[id]/page.tsx). Le HTML est stocké tel
+ * quel : c'est lui que l'export serveur relit pour produire le DOCX/PDF.
+ */
+export async function updateDocumentContent(id: string, contentHtml: string): Promise<ApiSuccess<AppDocument>> {
+  try {
+    const res = await http.put<{ data: BackendDocumentDTO }>(`/documents/${id}/content`, { contentHtml });
+    return ok(adaptDocumentDTO(res.data.data));
+  } catch (e) {
+    throw toApiError(e, `/api/v1/documents/${id}/content`);
+  }
+}
+
+/** Autosave par section — flux hérité, conservé pour les documents créés avant l'éditeur type Word. */
 export async function updateDocumentSection(documentId: string, sectionId: string, content: string): Promise<ApiSuccess<DocumentSection>> {
   try {
     const res = await http.put<{ data: BackendDocumentSectionDTO }>(`/documents/${documentId}/sections/${sectionId}`, { content });
     return ok(adaptDocumentSectionDTO(res.data.data));
   } catch (e) {
     throw toApiError(e, `/api/v1/documents/${documentId}/sections/${sectionId}`);
+  }
+}
+
+/**
+ * Amélioration rédactionnelle du passage sélectionné dans l'éditeur type Word.
+ * La suggestion est retournée sans être appliquée : c'est l'utilisateur qui
+ * décide de remplacer sa sélection après comparaison avant/après.
+ */
+export async function improveDocumentSelection(
+  documentId: string,
+  text: string,
+): Promise<ApiSuccess<{ aiSuggestedContent: string; confidenceScore?: number }>> {
+  try {
+    const res = await http.post<{ data: { aiSuggestedContent: string; confidenceScore?: number } }>(
+      `/documents/${documentId}/improve-selection`,
+      { text },
+    );
+    return ok(res.data.data);
+  } catch (e) {
+    throw toApiError(e, `/api/v1/documents/${documentId}/improve-selection`);
   }
 }
 

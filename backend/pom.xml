@@ -68,6 +68,7 @@
         <poi.version>5.3.0</poi.version>
         <pdfbox.version>3.0.3</pdfbox.version>
         <minio.version>8.5.12</minio.version>
+        <jsoup.version>1.17.2</jsoup.version>
         <pgvector.version>0.1.6</pgvector.version>
         <logstash-logback.version>7.4</logstash-logback.version>
     </properties>
@@ -159,6 +160,18 @@
                 <groupId>io.minio</groupId>
                 <artifactId>minio</artifactId>
                 <version>${minio.version}</version>
+            </dependency>
+            <!--
+                jsoup : lecture du HTML produit par l'éditeur type Word du
+                frontend (HtmlContentParser). Un parseur maison serait à la
+                fois plus long et plus fragile — le HTML d'un éditeur riche
+                contient des attributs de style arbitraires, des cellules
+                fusionnées et des balises imbriquées.
+            -->
+            <dependency>
+                <groupId>org.jsoup</groupId>
+                <artifactId>jsoup</artifactId>
+                <version>${jsoup.version}</version>
             </dependency>
             <dependency>
                 <groupId>com.pgvector</groupId>

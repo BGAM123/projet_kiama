@@ -22,12 +22,14 @@ export const documentTypeStatusTone: Record<DocumentTypeStatus, string> = {
 
 export const documentStatusLabel: Record<DocumentStatus, string> = {
   BROUILLON: 'Brouillon',
+  SAUVEGARDE: 'Sauvegardé',
   FINALISE: 'Finalisé',
   ARCHIVE: 'Archivé',
 };
 
 export const documentStatusTone: Record<DocumentStatus, string> = {
   BROUILLON: 'bg-muted text-muted-foreground border-border',
+  SAUVEGARDE: 'bg-info/15 text-info border-info/30',
   FINALISE: 'bg-success/15 text-success border-success/30',
   ARCHIVE: 'bg-muted text-muted-foreground border-border',
 };

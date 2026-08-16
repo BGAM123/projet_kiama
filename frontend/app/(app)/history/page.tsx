@@ -40,12 +40,9 @@ export default function HistoryPage() {
       })
       .filter((d: AppDocument) => {
         if (!search.trim()) return true;
-        const name = documentTypes?.find((t: DocumentType) => t.id === d.documentTypeId)?.name ?? '';
-        return name.toLowerCase().includes(search.toLowerCase());
+        return (d.title ?? '').toLowerCase().includes(search.toLowerCase());
       });
   }, [docsList, statusFilter, catFilter, search, documentTypes]);
-
-  const docTypeName = (id: string) => documentTypes?.find((d: DocumentType) => d.id === id)?.name ?? '—';
 
   return (
     <div className="mx-auto max-w-7xl space-y-6 p-6 lg:p-8">
@@ -68,7 +65,7 @@ export default function HistoryPage() {
             <SelectTrigger className="w-full lg:w-44" aria-label="Statut"><SelectValue placeholder="Statut" /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">Tous statuts</SelectItem>
-              {Object.entries({ BROUILLON: 'Brouillon', FINALISE: 'Finalisé', ARCHIVE: 'Archivé' }).map(([k, v]) => <SelectItem key={k} value={k}>{v}</SelectItem>)}
+              {Object.entries({ BROUILLON: 'Brouillon', SAUVEGARDE: 'Sauvegardé', FINALISE: 'Finalisé', ARCHIVE: 'Archivé' }).map(([k, v]) => <SelectItem key={k} value={k}>{v}</SelectItem>)}
             </SelectContent>
           </Select>
         </CardContent>
@@ -92,7 +89,7 @@ export default function HistoryPage() {
                       <FileText className="h-5 w-5" />
                     </div>
                     <div className="min-w-0">
-                      <p className="truncate font-medium">{docTypeName(d.documentTypeId)}</p>
+                      <p className="truncate font-medium">{d.title ?? '—'}</p>
                       <p className="truncate text-xs text-muted-foreground">{formatDateTime(d.updatedAt ?? d.createdAt)}</p>
                     </div>
                   </div>

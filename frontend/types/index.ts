@@ -131,7 +131,8 @@ export type Tone = 'FORMEL' | 'INFORMATIF' | 'PERSUASIF' | 'CONCIS' | 'NEUTRE';
 export type Language = 'FR' | 'EN' | 'ES' | 'DE';
 
 /** Cycle de vie d'un document en édition manuelle assistée — remplace l'ancien statut de génération/échec IA (plus de flux conversationnel). */
-export type DocumentStatus = 'BROUILLON' | 'FINALISE' | 'ARCHIVE';
+/** BROUILLON (squelette tout juste créé, jamais enregistré) -> SAUVEGARDE (au moins un enregistrement effectué dans l'éditeur) -> FINALISE (assemblé et exporté) -> ARCHIVE. */
+export type DocumentStatus = 'BROUILLON' | 'SAUVEGARDE' | 'FINALISE' | 'ARCHIVE';
 
 export type DocumentSectionType = 'TITLE' | 'SUBTITLE' | 'SUB_SUBTITLE' | 'TABLE' | 'PARAGRAPH_PLACEHOLDER';
 
@@ -166,12 +167,22 @@ export interface DocumentSection {
  */
 export interface AppDocument {
   id: string;
-  documentTypeId: string;
+  /** Absent pour un document importé directement depuis un fichier (pas de gabarit) — voir `title`. */
+  documentTypeId?: string;
   userId: string;
   status: DocumentStatus;
   language: Language;
   tone: Tone;
+  /** Titre résolu par le serveur : nom du Document Type, ou nom du fichier importé. */
+  title?: string;
+  /** Plan hérité du Document Type (sommaire, amélioration IA) — le contenu rédigé vit dans `contentHtml`. Vide pour un document importé. */
   sections: DocumentSection[];
+  /**
+   * Document complet mis en forme dans l'éditeur type Word — source de vérité
+   * du contenu. Absent pour les documents créés avant cet éditeur, dont le
+   * contenu est réparti dans `sections[].userContent`.
+   */
+  contentHtml?: string;
   /** Moyenne des scores des sections évaluées — absente tant qu'aucune section n'a de score. */
   globalConfidenceScore?: number;
   createdAt: string;
