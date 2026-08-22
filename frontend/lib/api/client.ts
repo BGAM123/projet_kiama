@@ -14,6 +14,7 @@
 import { http, toApiError } from './http';
 import type {
   AiModelConfig,
+  UpdateAiConfigPayload,
   AppDocument,
   AuditLogEntry,
   AuthSession,
@@ -921,7 +922,7 @@ export async function listAiConfigs(): Promise<ApiSuccess<AiModelConfig[]>> {
   }
 }
 
-export async function updateAiConfig(id: string, patch: Partial<AiModelConfig>): Promise<ApiSuccess<AiModelConfig>> {
+export async function updateAiConfig(id: string, patch: UpdateAiConfigPayload): Promise<ApiSuccess<AiModelConfig>> {
   try {
     const res = await http.patch<{ data: AiModelConfig }>(`/ai-configs/${id}`, patch);
     return ok(res.data.data);

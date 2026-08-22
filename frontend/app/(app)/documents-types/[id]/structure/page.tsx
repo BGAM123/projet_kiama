@@ -176,7 +176,7 @@ export default function StructurePreviewPage() {
               onClick={() => validate.mutate()}
               disabled={!canValidate || validate.isPending}
               title={canValidate ? undefined : "Une structure extraite avec succès est requise avant l'activation."}
-              className="bg-accent text-accent-foreground hover:bg-accent/90"
+
               size="sm"
             >
               <CheckCircle2 className="mr-2 h-4 w-4" /> Valider & activer

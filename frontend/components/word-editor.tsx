@@ -9,7 +9,6 @@ import {
   useRef,
   useState,
 } from 'react';
-import { Node, mergeAttributes } from '@tiptap/core';
 import { useEditor, EditorContent, type Editor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Placeholder from '@tiptap/extension-placeholder';
@@ -21,6 +20,7 @@ import Highlight from '@tiptap/extension-highlight';
 import Subscript from '@tiptap/extension-subscript';
 import Superscript from '@tiptap/extension-superscript';
 import TiptapImage from '@tiptap/extension-image';
+import { PaginationPlus, PAGE_SIZES } from 'tiptap-pagination-plus';
 import {
   AlignCenter,
   AlignJustify,
@@ -46,7 +46,6 @@ import {
   Redo2,
   Rows3,
   Scissors,
-  SeparatorHorizontal,
   Sparkles,
   Strikethrough,
   Subscript as SubscriptIcon,
@@ -78,8 +77,9 @@ import { cn } from '@/lib/utils';
 /**
  * Éditeur plein document, à la manière d'un traitement de texte : le squelette
  * du Document Type est chargé tel quel et se modifie directement — police,
- * taille, couleur, surlignage, alignement, listes, tableaux, images, sauts de
- * page — avant export en DOCX ou PDF.
+ * taille, couleur, surlignage, alignement, listes, tableaux, images — avant
+ * export en DOCX ou PDF. La pagination (découpage en pages A4, numérotation)
+ * est automatique, gérée par {@link PaginationPlus} au fil de la frappe.
  *
  * Le format manipulé est le HTML de l'éditeur, et c'est aussi celui qui est
  * stocké puis relu par l'export serveur ({@code HtmlContentParser}). Tout ce
@@ -93,24 +93,22 @@ import { cn } from '@/lib/utils';
 // ---------------------------------------------------------------------------
 
 /**
- * Saut de page. Sans rendu propre à l'écran (l'éditeur est un flux continu, pas
- * une pagination réelle) : matérialisé par un trait pointillé, et traduit en
- * vrai saut de page à l'export.
+ * Pagination automatique : l'éditeur découpe lui-même le contenu en pages A4
+ * au fil de la frappe (mesure de hauteur réelle), avec numérotation en pied de
+ * page — remplace l'ancien "saut de page" manuel (un simple séparateur visuel
+ * sans vraie pagination). Dimensions {@link PAGE_SIZES.A4} de la bibliothèque :
+ * 794×1123px avec ses marges par défaut, au pixel près la largeur qu'avait la
+ * page fixe précédente (21 cm à 96 dpi).
  */
-const PageBreak = Node.create({
-  name: 'pageBreak',
-  group: 'block',
-  atom: true,
-  selectable: true,
-
-  parseHTML() {
-    return [{ tag: 'div[data-page-break]' }];
-  },
-
-  renderHTML({ HTMLAttributes }) {
-    return ['div', mergeAttributes(HTMLAttributes, { 'data-page-break': '', class: 'page-break' })];
-  },
-});
+const PAGE_CONFIG = {
+  ...PAGE_SIZES.A4,
+  pageGap: 24,
+  pageGapBorderColor: 'hsl(var(--border))',
+  // Toujours un gris neutre, jamais teinté par le thème sombre : c'est
+  // l'espace entre deux feuilles, pas du contenu du document.
+  pageBreakBackground: '#e5e7eb',
+  footerRight: 'Page {page}',
+};
 
 /**
  * Image dont la largeur voulue est écrite dans `style`, et non dans un attribut
@@ -240,9 +238,9 @@ export const WordEditor = forwardRef<WordEditorHandle, WordEditorProps>(function
       TextAlign.configure({ types: ['heading', 'paragraph'] }),
       TableKit.configure({ table: { resizable: true, allowTableNodeSelection: true } }),
       DocumentImage.configure({ allowBase64: true, inline: false }),
-      PageBreak,
       CharacterCount,
       Placeholder.configure({ placeholder: 'Rédigez votre document…' }),
+      PaginationPlus.configure(PAGE_CONFIG),
     ],
     content: initialHtml,
     editorProps: {
@@ -337,7 +335,7 @@ export const WordEditor = forwardRef<WordEditorHandle, WordEditorProps>(function
       />
 
       <div className="scrollbar-thin flex-1 overflow-y-auto bg-muted/40 p-4 lg:p-8">
-        <div className="word-page mx-auto">
+        <div className="flex justify-center">
           <EditorContent editor={editor} />
         </div>
       </div>
@@ -494,11 +492,6 @@ function Toolbar({
       <ToolbarButton icon={ImagePlus} label="Insérer une image" onClick={onPickImage} />
       <TablePicker editor={editor} />
       <ToolbarButton icon={Minus} label="Ligne horizontale" onClick={() => editor.chain().focus().setHorizontalRule().run()} />
-      <ToolbarButton
-        icon={SeparatorHorizontal}
-        label="Saut de page"
-        onClick={() => editor.chain().focus().insertContent({ type: 'pageBreak' }).run()}
-      />
 
       {onImproveSelection && (
         <>

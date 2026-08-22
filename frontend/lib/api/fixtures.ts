@@ -216,12 +216,12 @@ export const referenceDocuments: ReferenceDocument[] = [
 
 
 export const aiModelConfigs: AiModelConfig[] = [
-  { id: 'ai1', provider: 'OPENAI', modelName: 'gpt-4o', apiKeyRef: 'sk-••••••••••••a1f4', isDefault: true, active: true },
-  { id: 'ai2', provider: 'CLAUDE', modelName: 'claude-sonnet-4', apiKeyRef: 'sk-ant-••••••88c2', isDefault: false, active: true },
-  { id: 'ai3', provider: 'GEMINI', modelName: 'gemini-1.5-pro', apiKeyRef: 'AIza••••••9d21', isDefault: false, active: true },
-  { id: 'ai4', provider: 'MISTRAL', modelName: 'mistral-large', apiKeyRef: 'm-••••••••e7b3', isDefault: false, active: false },
-  { id: 'ai5', provider: 'OLLAMA', modelName: 'llama3.1:70b', apiKeyRef: '—', isDefault: false, active: false },
-  { id: 'ai6', provider: 'DEEPSEEK', modelName: 'deepseek-chat', apiKeyRef: 'sk-••••••2bc9', isDefault: false, active: false },
+  { id: 'ai1', provider: 'OPENAI', modelName: 'gpt-4o', apiKeyRef: 'OPENAI_API_KEY', hasStoredApiKey: true, apiKeyPreview: '•••• a1f4', isDefault: true, active: true },
+  { id: 'ai2', provider: 'CLAUDE', modelName: 'claude-sonnet-4', apiKeyRef: 'ANTHROPIC_API_KEY', hasStoredApiKey: true, apiKeyPreview: '•••• 88c2', isDefault: false, active: true },
+  { id: 'ai3', provider: 'GEMINI', modelName: 'gemini-1.5-pro', apiKeyRef: 'GEMINI_API_KEY', hasStoredApiKey: false, apiKeyPreview: null, isDefault: false, active: true },
+  { id: 'ai4', provider: 'MISTRAL', modelName: 'mistral-large', apiKeyRef: 'MISTRAL_API_KEY', hasStoredApiKey: false, apiKeyPreview: null, isDefault: false, active: false },
+  { id: 'ai5', provider: 'OLLAMA', modelName: 'llama3.1:70b', apiKeyRef: '—', hasStoredApiKey: false, apiKeyPreview: null, isDefault: false, active: false },
+  { id: 'ai6', provider: 'DEEPSEEK', modelName: 'deepseek-chat', apiKeyRef: 'DEEPSEEK_API_KEY', hasStoredApiKey: false, apiKeyPreview: null, isDefault: false, active: false },
 ];
 
 export const auditLogs: AuditLogEntry[] = [

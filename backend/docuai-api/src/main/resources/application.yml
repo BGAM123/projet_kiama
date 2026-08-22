@@ -107,6 +107,11 @@ docuai:
     bucket-references: ${MINIO_BUCKET_REFERENCES:docuai-references}
     bucket-exports:    ${MINIO_BUCKET_EXPORTS:docuai-exports}
   ai:
+    # Clé maîtresse AES-256 (Base64, 32 octets décodés) chiffrant les clés API
+    # saisies depuis l'admin UI et stockées en base (ai_model_config.cle_api_chiffree,
+    # voir ApiKeyCipherService). Laisser vide désactive ce chemin sans casser
+    # les fournisseurs déjà configurés par variable d'environnement ci-dessous.
+    credentials-encryption-key: ${DOCUAI_AI_CREDENTIALS_KEY:}
     openai:
       api-key: ${OPENAI_API_KEY:}
     anthropic:

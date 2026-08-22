@@ -47,7 +47,7 @@ export function SectionSuggestionDiff({
           <Button type="button" variant="outline" size="sm" disabled={pending} onClick={onReject}>
             <X className="mr-1.5 h-3.5 w-3.5" /> Rejeter
           </Button>
-          <Button type="button" size="sm" disabled={pending} className="bg-accent text-accent-foreground hover:bg-accent/90" onClick={onAccept}>
+          <Button type="button" size="sm" disabled={pending} onClick={onAccept}>
             {pending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Check className="mr-1.5 h-3.5 w-3.5" />} Accepter
           </Button>
         </div>

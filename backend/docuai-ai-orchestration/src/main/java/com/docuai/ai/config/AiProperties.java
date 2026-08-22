@@ -9,10 +9,20 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * cf. .env.example). Un sous-objet par fournisseur — {@code apiKey} vide
  * signifie "fournisseur non configuré" (voir les vérifications
  * {@code requireApiKey()} des adaptateurs {@code provider.*}).
+ * <p>
+ * {@code credentialsEncryptionKey} est la clé maîtresse (AES-256, Base64) qui
+ * chiffre/déchiffre les clés API saisies depuis l'admin UI et stockées dans
+ * {@code ai_model_config.cle_api_chiffree} (voir {@link com.docuai.ai.security.ApiKeyCipherService}) —
+ * distincte des clés {@code apiKey} ci-dessous, qui restent la voie de
+ * configuration par variable d'environnement (repli si aucune clé n'est
+ * stockée en base pour ce fournisseur).
  */
 @ConfigurationProperties(prefix = "docuai.ai")
 @Getter
+@Setter
 public class AiProperties {
+
+    private String credentialsEncryptionKey;
 
     private final OpenAi openai = new OpenAi();
     private final Anthropic anthropic = new Anthropic();

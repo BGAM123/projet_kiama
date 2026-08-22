@@ -174,7 +174,7 @@ export default function AdminUsersPage() {
         description="Gérez les comptes et leur accès."
         icon={UsersIcon}
         actions={
-          <Button className="bg-accent text-accent-foreground hover:bg-accent/90" onClick={openCreate}>
+          <Button onClick={openCreate}>
             <UserPlus className="mr-2 h-4 w-4" /> Nouvel utilisateur
           </Button>
         }
@@ -314,7 +314,7 @@ export default function AdminUsersPage() {
               )}
               <DialogFooter>
                 <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>Annuler</Button>
-                <Button type="submit" disabled={editMutation.isPending} className="bg-accent text-accent-foreground hover:bg-accent/90">
+                <Button type="submit" disabled={editMutation.isPending}>
                   {editMutation.isPending ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Enregistrement…</> : 'Enregistrer'}
                 </Button>
               </DialogFooter>
@@ -361,8 +361,8 @@ export default function AdminUsersPage() {
                   </button>
                 </div>
                 {createForm.formState.errors.password && <p className="text-xs text-destructive">{createForm.formState.errors.password.message}</p>}
-                <div className="flex items-start gap-2 rounded-md border border-accent/30 bg-accent/5 px-3 py-2">
-                  <Mail className="mt-0.5 h-3.5 w-3.5 flex-none text-accent" />
+                <div className="flex items-start gap-2 rounded-md border border-info/30 bg-info/5 px-3 py-2">
+                  <Mail className="mt-0.5 h-3.5 w-3.5 flex-none text-info" />
                   <p className="text-xs text-muted-foreground">Ce mot de passe sera envoyé par e-mail à l'utilisateur. Il pourra le modifier depuis son compte.</p>
                 </div>
               </div>
@@ -384,7 +384,7 @@ export default function AdminUsersPage() {
               )}
               <DialogFooter>
                 <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>Annuler</Button>
-                <Button type="submit" disabled={createMutation.isPending} className="bg-accent text-accent-foreground hover:bg-accent/90">
+                <Button type="submit" disabled={createMutation.isPending}>
                   {createMutation.isPending ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Création…</> : 'Créer et envoyer'}
                 </Button>
               </DialogFooter>

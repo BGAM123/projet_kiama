@@ -12,9 +12,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent } from '@/components/ui/card';
-import { Separator } from '@/components/ui/separator';
 import { useAuth } from '@/lib/auth-store';
-import { demoCredentials } from '@/lib/api/fixtures';
 
 const schema = z.object({
   email: z.string().email('Adresse e-mail invalide.'),
@@ -29,7 +27,7 @@ export default function LoginPage() {
   const loading = useAuth((s) => s.loading);
   const [serverError, setServerError] = useState<string | null>(null);
 
-  const { register, handleSubmit, formState: { errors }, setValue } = useForm<FormValues>({
+  const { register, handleSubmit, formState: { errors } } = useForm<FormValues>({
     resolver: zodResolver(schema),
     defaultValues: { email: '', password: '' },
   });
@@ -46,21 +44,16 @@ export default function LoginPage() {
     }
   }
 
-  function fillDemo(email: string) {
-    setValue('email', email);
-    setValue('password', demoCredentials[0].password);
-  }
-
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background p-4">
       <div className="absolute inset-0 bg-grid opacity-40" aria-hidden />
-      <div className="absolute inset-0 bg-gradient-to-br from-primary/5 via-transparent to-accent/10" aria-hidden />
+      <div className="absolute inset-0 bg-gradient-to-br from-primary/5 via-transparent to-primary/10" aria-hidden />
 
       <div className="relative grid w-full max-w-5xl gap-8 lg:grid-cols-2 lg:items-stretch">
         {/* Branding panel */}
-        <div className="hidden flex-col justify-between rounded-xl border border-border/60 bg-primary p-10 text-primary-foreground lg:flex">
+        <div className="hidden flex-col justify-between rounded-xl border border-border/60 bg-gradient-to-br from-primary to-primary/85 p-10 text-primary-foreground shadow-xl lg:flex">
           <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-accent text-accent-foreground">
+            <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-primary-foreground/15 text-primary-foreground ring-1 ring-inset ring-primary-foreground/20">
               <FileText className="h-6 w-6" />
             </div>
             <span className="text-2xl font-semibold tracking-tight">DocuAI</span>
@@ -73,12 +66,11 @@ export default function LoginPage() {
               Importez vos documents existants ou décrivez-les en langage naturel pour en obtenir le squelette, puis rédigez chaque section vous-même — avec l'IA comme assistant de reformulation à la demande.
             </p>
             <ul className="space-y-2 text-sm text-primary-foreground/85">
-              <li className="flex items-center gap-2"><Sparkles className="h-4 w-4 text-accent" /> Extraction ou génération IA de la structure documentaire</li>
-              <li className="flex items-center gap-2"><Sparkles className="h-4 w-4 text-accent" /> Rédaction manuelle assistée, section par section</li>
-              <li className="flex items-center gap-2"><Sparkles className="h-4 w-4 text-accent" /> Édition WYSIWYG & export DOCX / PDF / Markdown</li>
+              <li className="flex items-center gap-2"><Sparkles className="h-4 w-4 text-primary-foreground/70" /> Extraction ou génération IA de la structure documentaire</li>
+              <li className="flex items-center gap-2"><Sparkles className="h-4 w-4 text-primary-foreground/70" /> Rédaction manuelle assistée, section par section</li>
+              <li className="flex items-center gap-2"><Sparkles className="h-4 w-4 text-primary-foreground/70" /> Édition WYSIWYG & export DOCX / PDF / Markdown</li>
             </ul>
           </div>
-          <p className="text-xs text-primary-foreground/60">Demo — données simulées, aucune donnée réelle n'est traitée.</p>
         </div>
 
         {/* Login form */}
@@ -127,29 +119,6 @@ export default function LoginPage() {
                 {loading ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Connexion…</> : 'Se connecter'}
               </Button>
             </form>
-
-            <div className="my-6 flex items-center gap-3">
-              <Separator className="flex-1" />
-              <span className="text-xs uppercase tracking-wider text-muted-foreground">Comptes de démo</span>
-              <Separator className="flex-1" />
-            </div>
-
-            <div className="space-y-2">
-              {demoCredentials.map((c) => (
-                <button
-                  key={c.email}
-                  type="button"
-                  onClick={() => fillDemo(c.email)}
-                  className="flex w-full items-center justify-between rounded-md border border-border bg-muted/40 px-3 py-2 text-left text-sm transition-colors hover:border-accent hover:bg-accent/10"
-                >
-                  <div>
-                    <p className="font-medium">{c.email}</p>
-                    <p className="text-xs text-muted-foreground">{c.role} · mot de passe : {c.password}</p>
-                  </div>
-                  <span className="text-xs text-accent">Utiliser</span>
-                </button>
-              ))}
-            </div>
           </CardContent>
         </Card>
       </div>

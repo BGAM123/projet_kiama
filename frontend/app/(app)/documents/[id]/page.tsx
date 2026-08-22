@@ -254,7 +254,7 @@ export default function DocumentEditPage() {
           </Button>
           <Button
             size="sm"
-            className="bg-accent text-accent-foreground hover:bg-accent/90"
+
             disabled={finalizeMutation.isPending || doc.status === 'FINALISE'}
             onClick={() => finalizeMutation.mutate()}
           >

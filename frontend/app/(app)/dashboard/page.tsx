@@ -69,7 +69,7 @@ export default function DashboardPage() {
       label: 'Taux de réussite',
       value: stats ? `${stats.successRate}%` : '—',
       icon: TrendingUp,
-      tone: 'text-accent',
+      tone: 'text-[hsl(var(--chart-5))]',
       hint: 'Générations abouties',
     },
   ];
@@ -82,7 +82,7 @@ export default function DashboardPage() {
         description="Vue d'ensemble de votre activité de génération documentaire."
         icon={Bot}
         actions={
-          <Button asChild className="bg-accent text-accent-foreground hover:bg-accent/90">
+          <Button asChild>
             <Link href="/documents/new"><Plus className="mr-2 h-4 w-4" /> Nouveau document</Link>
           </Button>
         }
@@ -205,7 +205,7 @@ export default function DashboardPage() {
             <div className="flex flex-col items-center gap-3 py-12 text-center">
               <FileText className="h-10 w-10 text-muted-foreground/50" />
               <p className="text-sm text-muted-foreground">Aucun document pour le moment.</p>
-              <Button asChild className="bg-accent text-accent-foreground hover:bg-accent/90">
+              <Button asChild>
                 <Link href="/documents/new"><Plus className="mr-2 h-4 w-4" /> Nouveau document</Link>
               </Button>
             </div>

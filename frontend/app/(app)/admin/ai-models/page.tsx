@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { Sparkles, Star, Check, Loader2, Save } from 'lucide-react';
+import { Sparkles, Star, Check, Loader2, Save, KeyRound } from 'lucide-react';
 import { PageHeader } from '@/components/page-header';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -22,10 +22,10 @@ import type { AiModelConfig, AiProvider } from '@/types';
 const providerColor: Record<AiProvider, string> = {
   OPENAI: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400',
   CLAUDE: 'bg-orange-500/15 text-orange-600 dark:text-orange-400',
-  GEMINI: 'bg-blue-500/15 text-blue-600 dark:text-blue-400',
+  GEMINI: 'bg-cyan-500/15 text-cyan-600 dark:text-cyan-400',
   MISTRAL: 'bg-rose-500/15 text-rose-600 dark:text-rose-400',
   OLLAMA: 'bg-slate-500/15 text-slate-600 dark:text-slate-300',
-  DEEPSEEK: 'bg-indigo-500/15 text-indigo-600 dark:text-indigo-400',
+  DEEPSEEK: 'bg-violet-500/15 text-violet-600 dark:text-violet-400',
   GROQ: 'bg-amber-500/15 text-amber-600 dark:text-amber-400',
   QWEN: 'bg-fuchsia-500/15 text-fuchsia-600 dark:text-fuchsia-400',
 };
@@ -47,8 +47,13 @@ export default function AdminAiModelsPage() {
   }
 
   function setDefault(c: AiModelConfig) {
-    update.mutate({ id: c.id, patch: { isDefault: true } });
-    toast.success(`${providerLabel[c.provider]} défini comme fournisseur par défaut.`);
+    update.mutate(
+      { id: c.id, patch: { isDefault: true } },
+      {
+        onSuccess: () => toast.success(`${providerLabel[c.provider]} défini comme fournisseur par défaut.`),
+        onError: () => toast.error(`Impossible de définir ${providerLabel[c.provider]} comme fournisseur par défaut.`),
+      },
+    );
   }
 
   function openEdit(c: AiModelConfig) {
@@ -59,7 +64,13 @@ export default function AdminAiModelsPage() {
   function saveKey() {
     if (!editing) return;
     update.mutate(
-      { id: editing.id, patch: { apiKeyRef: draftKey || editing.apiKeyRef, modelName: editing.modelName } },
+      {
+        id: editing.id,
+        patch: {
+          modelName: editing.modelName,
+          ...(draftKey.trim() ? { apiKey: draftKey.trim() } : {}),
+        },
+      },
       {
         onSuccess: () => {
           toast.success('Configuration enregistrée.');
@@ -95,11 +106,17 @@ export default function AdminAiModelsPage() {
                 <CardContent className="space-y-3">
                   <div className="flex items-center justify-between text-xs">
                     <span className="text-muted-foreground">Clé API</span>
-                    <span className="font-mono">{c.apiKeyRef}</span>
+                    {c.hasStoredApiKey ? (
+                      <span className="flex items-center gap-1 font-mono text-foreground">
+                        <KeyRound className="h-3 w-3 text-success" /> {c.apiKeyPreview}
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground">Non configurée</span>
+                    )}
                   </div>
                   <div className="flex items-center justify-between">
                     {c.isDefault ? (
-                      <Badge variant="outline" className="border-accent/30 bg-accent/15 text-accent"><Star className="mr-1 h-3 w-3" /> Par défaut</Badge>
+                      <Badge variant="outline" className="border-success/30 bg-success/10 text-success"><Star className="mr-1 h-3 w-3" /> Par défaut</Badge>
                     ) : (
                       <Button variant="ghost" size="sm" onClick={() => setDefault(c)} disabled={!c.active}>Définir par défaut</Button>
                     )}
@@ -113,8 +130,10 @@ export default function AdminAiModelsPage() {
       <Dialog open={!!editing} onOpenChange={(o) => !o && setEditing(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2"><Sparkles className="h-5 w-5 text-accent" /> {editing ? providerLabel[editing.provider] : ''}</DialogTitle>
-            <DialogDescription>Modifiez le modèle et la clé API. La clé est masquée pour des raisons de sécurité.</DialogDescription>
+            <DialogTitle className="flex items-center gap-2"><Sparkles className="h-5 w-5 text-primary" /> {editing ? providerLabel[editing.provider] : ''}</DialogTitle>
+            <DialogDescription>
+              Modifiez le modèle et la clé API. La clé est chiffrée côté serveur et n'est plus jamais réaffichée en clair.
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
@@ -123,13 +142,24 @@ export default function AdminAiModelsPage() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="key">Clé API</Label>
-              <Input id="key" type="password" placeholder={editing?.apiKeyRef} value={draftKey} onChange={(e) => setDraftKey(e.target.value)} />
-              <p className="text-xs text-muted-foreground">Laissez vide pour conserver la clé actuelle ({editing?.apiKeyRef}).</p>
+              <Input
+                id="key"
+                type="password"
+                autoComplete="off"
+                placeholder={editing?.hasStoredApiKey ? editing.apiKeyPreview ?? '' : 'sk-...'}
+                value={draftKey}
+                onChange={(e) => setDraftKey(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                {editing?.hasStoredApiKey
+                  ? `Laissez vide pour conserver la clé actuelle (${editing.apiKeyPreview}).`
+                  : "Aucune clé enregistrée pour l'instant — ce fournisseur utilise la variable d'environnement serveur, si définie."}
+              </p>
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditing(null)}>Annuler</Button>
-            <Button onClick={saveKey} disabled={update.isPending} className="bg-accent text-accent-foreground hover:bg-accent/90">
+            <Button onClick={saveKey} disabled={update.isPending}>
               {update.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />} Enregistrer
             </Button>
           </DialogFooter>

@@ -63,7 +63,7 @@ export default function ChangePasswordPage() {
         <CardContent className="p-6">
           {user && (
             <div className="mb-5 flex items-center gap-3 rounded-md border border-border bg-muted/40 px-4 py-3">
-              <ShieldCheck className="h-5 w-5 flex-none text-accent" />
+              <ShieldCheck className="h-5 w-5 flex-none text-primary" />
               <div>
                 <p className="text-sm font-medium">{user.firstName} {user.lastName}</p>
                 <p className="text-xs text-muted-foreground">{user.email}</p>
@@ -97,7 +97,7 @@ export default function ChangePasswordPage() {
               </div>
             )}
 
-            <Button type="submit" className="bg-accent text-accent-foreground hover:bg-accent/90" disabled={isSubmitting}>
+            <Button type="submit" disabled={isSubmitting}>
               {isSubmitting ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Enregistrement…</> : 'Enregistrer le nouveau mot de passe'}
             </Button>
           </form>

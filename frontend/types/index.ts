@@ -206,8 +206,20 @@ export interface AiModelConfig {
   provider: AiProvider;
   modelName: string;
   apiKeyRef: string;
+  /** true si une clé API réelle est stockée (chiffrée côté serveur) pour ce fournisseur. */
+  hasStoredApiKey: boolean;
+  /** Aperçu masqué ("•••• ab12") si hasStoredApiKey, sinon null — jamais la clé en clair. */
+  apiKeyPreview: string | null;
   isDefault: boolean;
   active: boolean;
+}
+
+export interface UpdateAiConfigPayload {
+  modelName?: string;
+  /** Nouvelle clé API en clair — chiffrée côté serveur avant stockage, jamais renvoyée. Omettre pour ne pas la modifier. */
+  apiKey?: string;
+  isDefault?: boolean;
+  active?: boolean;
 }
 
 export interface AuditLogEntry {

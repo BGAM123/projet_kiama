@@ -79,16 +79,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   const Sidebar = (
     <aside className="flex h-full w-64 flex-col border-r border-border bg-card">
-      <div className="flex h-16 items-center gap-2 border-b border-border px-5">
-        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+      <div className="flex h-16 items-center gap-2.5 border-b border-border px-5">
+        <div className="flex h-9 w-9 flex-none items-center justify-center rounded-xl bg-gradient-to-br from-primary to-primary/80 text-primary-foreground shadow-sm">
           <FileText className="h-5 w-5" />
         </div>
         <div className="leading-tight">
-          <p className="text-base font-semibold tracking-tight">DocuAI</p>
+          <p className="text-base font-semibold tracking-tight text-foreground">DocuAI</p>
           <p className="text-[11px] text-muted-foreground">Génération documentaire</p>
         </div>
       </div>
-      <nav className="flex-1 space-y-1 overflow-y-auto p-3 scrollbar-thin">
+      <nav className="flex-1 space-y-0.5 overflow-y-auto p-3 scrollbar-thin">
         {items.map((item) => {
           const active = pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(item.href));
           const Icon = item.icon;
@@ -98,22 +98,27 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               href={item.href}
               onClick={() => setMobileOpen(false)}
               className={cn(
-                'flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors',
+                'group flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all',
                 active
-                  ? 'bg-primary text-primary-foreground'
-                  : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                  ? 'bg-primary text-primary-foreground shadow-sm'
+                  : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
               )}
             >
-              <Icon className="h-4 w-4 flex-none" />
+              <Icon
+                className={cn(
+                  'h-4 w-4 flex-none transition-colors',
+                  active ? 'text-primary-foreground' : 'text-muted-foreground group-hover:text-accent-foreground',
+                )}
+              />
               {item.label}
             </Link>
           );
         })}
       </nav>
       <div className="border-t border-border p-3">
-        <div className="flex items-center gap-2 rounded-md bg-muted/50 px-3 py-2">
-          <ListChecks className="h-4 w-4 text-accent" />
-          <span className="text-xs text-muted-foreground">{isAdmin ? 'Espace administrateur' : 'Espace utilisateur'}</span>
+        <div className="flex items-center gap-2 rounded-lg bg-accent/60 px-3 py-2.5">
+          <ListChecks className="h-4 w-4 flex-none text-primary" />
+          <span className="text-xs font-medium text-accent-foreground">{isAdmin ? 'Espace administrateur' : 'Espace utilisateur'}</span>
         </div>
       </div>
     </aside>
@@ -127,20 +132,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       {/* Mobile sidebar */}
       {mobileOpen && (
         <div className="fixed inset-0 z-50 lg:hidden">
-          <div className="absolute inset-0 bg-black/50" onClick={() => setMobileOpen(false)} />
-          <div className="absolute left-0 top-0 h-full animate-slide-in-right">{Sidebar}</div>
+          <div className="absolute inset-0 bg-foreground/40 backdrop-blur-[2px]" onClick={() => setMobileOpen(false)} />
+          <div className="absolute left-0 top-0 h-full animate-slide-in-right shadow-2xl">{Sidebar}</div>
         </div>
       )}
 
       {/* Main */}
       <div className="flex flex-1 flex-col overflow-hidden">
-        <header className="flex h-16 items-center justify-between gap-3 border-b border-border bg-card px-4 lg:px-6">
+        <header className="sticky top-0 z-10 flex h-16 flex-none items-center justify-between gap-3 border-b border-border bg-card/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-card/80 lg:px-6">
           <div className="flex items-center gap-3">
             <Button variant="ghost" size="icon" className="lg:hidden" aria-label="Ouvrir le menu" onClick={() => setMobileOpen(true)}>
               <Menu className="h-5 w-5" />
             </Button>
             <div className="hidden items-center gap-2 sm:flex">
-              <span className="text-sm text-muted-foreground">Bonjour, {user.firstName}</span>
+              <span className="text-sm text-muted-foreground">
+                Bonjour, <span className="font-medium text-foreground">{user.firstName}</span>
+              </span>
             </div>
           </div>
           <div className="flex items-center gap-1">
@@ -148,8 +155,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <ThemeToggle />
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button className="ml-1 flex items-center gap-2 rounded-full outline-none" aria-label="Menu du profil">
-                  <Avatar className="h-9 w-9 border border-border">
+                <button className="ml-1 flex items-center gap-2 rounded-full outline-none ring-offset-background transition-shadow focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2" aria-label="Menu du profil">
+                  <Avatar className="h-9 w-9 border-2 border-primary/15">
                     <AvatarFallback className="bg-primary text-xs font-semibold text-primary-foreground">
                       {initials}
                     </AvatarFallback>

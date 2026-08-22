@@ -51,12 +51,13 @@ public class ClaudeAdapter implements AiProviderPort {
 
     @Override
     public GenerationResult generate(GenerationRequest request) {
-        requireApiKey();
+        String effectiveKey = resolveApiKey(request);
+        requireApiKey(effectiveKey);
         Map<String, Object> body = buildBody(request, false);
         try {
             JsonNode response = webClient.post()
                     .uri("/messages")
-                    .headers(this::authHeaders)
+                    .headers(h -> authHeaders(h, effectiveKey))
                     .bodyValue(body)
                     .retrieve()
                     .bodyToMono(JsonNode.class)
@@ -84,11 +85,12 @@ public class ClaudeAdapter implements AiProviderPort {
 
     @Override
     public Flux<Chunk> streamGenerate(GenerationRequest request) {
-        requireApiKey();
+        String effectiveKey = resolveApiKey(request);
+        requireApiKey(effectiveKey);
         Map<String, Object> body = buildBody(request, true);
         return webClient.post()
                 .uri("/messages")
-                .headers(this::authHeaders)
+                .headers(h -> authHeaders(h, effectiveKey))
                 .bodyValue(body)
                 .retrieve()
                 .bodyToFlux(new ParameterizedTypeReference<ServerSentEvent<String>>() {})
@@ -113,8 +115,8 @@ public class ClaudeAdapter implements AiProviderPort {
         }
     }
 
-    private void authHeaders(HttpHeaders headers) {
-        headers.set("x-api-key", properties.getApiKey());
+    private void authHeaders(HttpHeaders headers, String apiKey) {
+        headers.set("x-api-key", apiKey);
         headers.set("anthropic-version", properties.getApiVersion());
     }
 
@@ -140,8 +142,13 @@ public class ClaudeAdapter implements AiProviderPort {
         return messages;
     }
 
-    private void requireApiKey() {
-        if (properties.getApiKey() == null || properties.getApiKey().isBlank()) {
+    private String resolveApiKey(GenerationRequest request) {
+        String override = request.getApiKeyOverride();
+        return (override != null && !override.isBlank()) ? override : properties.getApiKey();
+    }
+
+    private void requireApiKey(String effectiveKey) {
+        if (effectiveKey == null || effectiveKey.isBlank()) {
             throw new AiProviderException("ANTHROPIC_API_KEY absente — configurez docuai.ai.anthropic.api-key avant d'utiliser le fournisseur Claude.");
         }
     }

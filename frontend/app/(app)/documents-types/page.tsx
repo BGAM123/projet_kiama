@@ -130,7 +130,7 @@ export default function DocumentTypesPage() {
               <Button variant="outline" onClick={() => setGenerating(true)}>
                 <Sparkles className="mr-2 h-4 w-4" /> Générer avec l&apos;IA
               </Button>
-              <Button asChild className="bg-accent text-accent-foreground hover:bg-accent/90">
+              <Button asChild>
                 <Link href="/documents-types/import"><Upload className="mr-2 h-4 w-4" /> Importer un document</Link>
               </Button>
             </div>
@@ -358,7 +358,7 @@ function EditDocumentTypeDialog({
           )}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>Annuler</Button>
-            <Button type="submit" disabled={editMutation.isPending} className="bg-accent text-accent-foreground hover:bg-accent/90">
+            <Button type="submit" disabled={editMutation.isPending}>
               {editMutation.isPending ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Enregistrement…</> : 'Enregistrer'}
             </Button>
           </DialogFooter>
@@ -463,7 +463,7 @@ function GenerateDocumentTypeDialog({
           )}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>Annuler</Button>
-            <Button type="submit" disabled={generateMutation.isPending} className="bg-accent text-accent-foreground hover:bg-accent/90">
+            <Button type="submit" disabled={generateMutation.isPending}>
               {generateMutation.isPending ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Génération…</> : <><Sparkles className="mr-2 h-4 w-4" /> Générer le squelette</>}
             </Button>
           </DialogFooter>

@@ -13,6 +13,9 @@ import java.util.List;
  * n'ont pas besoin de connaître {@code DocumentChunk}/pgvector).
  * {@code provider}/{@code model} sont résolus par l'orchestrateur si absents
  * (fournisseur par défaut, {@code ai_model_config.est_defaut}).
+ * {@code apiKeyOverride} est renseigné par l'orchestrateur quand une clé réelle
+ * est stockée (chiffrée) pour la configuration résolue — les adaptateurs
+ * l'utilisent en priorité sur leur clé issue de {@code docuai.ai.*} (repli).
  */
 @Getter
 @Builder(toBuilder = true)
@@ -25,4 +28,5 @@ public class GenerationRequest {
     private final List<ChatMessage> history = List.of();
     private final Double temperature;
     private final Integer maxOutputTokens;
+    private final String apiKeyOverride;
 }

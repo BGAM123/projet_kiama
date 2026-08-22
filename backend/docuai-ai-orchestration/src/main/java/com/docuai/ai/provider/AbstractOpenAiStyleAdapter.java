@@ -44,12 +44,13 @@ abstract class AbstractOpenAiStyleAdapter implements AiProviderPort {
 
     @Override
     public GenerationResult generate(GenerationRequest request) {
-        requireApiKey();
+        String effectiveKey = resolveApiKey(request);
+        requireApiKey(effectiveKey);
         Map<String, Object> body = buildBody(request, false);
         try {
             JsonNode response = webClient.post()
                     .uri("/chat/completions")
-                    .headers(h -> h.setBearerAuth(apiKey()))
+                    .headers(h -> h.setBearerAuth(effectiveKey))
                     .bodyValue(body)
                     .retrieve()
                     .bodyToMono(JsonNode.class)
@@ -73,11 +74,12 @@ abstract class AbstractOpenAiStyleAdapter implements AiProviderPort {
 
     @Override
     public Flux<Chunk> streamGenerate(GenerationRequest request) {
-        requireApiKey();
+        String effectiveKey = resolveApiKey(request);
+        requireApiKey(effectiveKey);
         Map<String, Object> body = buildBody(request, true);
         return webClient.post()
                 .uri("/chat/completions")
-                .headers(h -> h.setBearerAuth(apiKey()))
+                .headers(h -> h.setBearerAuth(effectiveKey))
                 .bodyValue(body)
                 .retrieve()
                 .bodyToFlux(new ParameterizedTypeReference<ServerSentEvent<String>>() {})
@@ -128,8 +130,14 @@ abstract class AbstractOpenAiStyleAdapter implements AiProviderPort {
         };
     }
 
-    private void requireApiKey() {
-        if (apiKey() == null || apiKey().isBlank()) {
+    /** Clé stockée en base (chiffrée, déchiffrée par l'orchestrateur) en priorité, sinon repli sur {@link #apiKey()} ({@code docuai.ai.*}). */
+    private String resolveApiKey(GenerationRequest request) {
+        String override = request.getApiKeyOverride();
+        return (override != null && !override.isBlank()) ? override : apiKey();
+    }
+
+    private void requireApiKey(String effectiveKey) {
+        if (effectiveKey == null || effectiveKey.isBlank()) {
             throw new AiProviderException(missingApiKeyMessage());
         }
     }

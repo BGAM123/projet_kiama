@@ -1,0 +1,110 @@
+<svg viewBox="0 0 1220 1080" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#64748B"/>
+    </marker>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#0f172a" flood-opacity="0.12"/>
+    </filter>
+  </defs>
+
+  <rect x="0" y="0" width="1220" height="1080" fill="#ffffff"/>
+
+  <text x="600" y="34" text-anchor="middle" font-size="24" font-weight="700" fill="#23266E">Architecture — Création d'un Document Type (gabarit)</text>
+  <text x="600" y="54" text-anchor="middle" font-size="13" fill="#64748B">Deux chemins d'entrée convergent vers le même statut de validation</text>
+
+  <!-- legend -->
+  <g font-size="12.5" fill="#334155">
+    <rect x="80" y="70" width="13" height="13" rx="3" fill="#F8FAFC" stroke="#94A3B8" stroke-dasharray="4,3"/>
+    <text x="99" y="80">Action utilisateur</text>
+    <rect x="340" y="70" width="13" height="13" rx="3" fill="#E6F7F5" stroke="#0F9488"/>
+    <text x="359" y="80">Parsing déterministe</text>
+    <rect x="600" y="70" width="13" height="13" rx="3" fill="#EEF0FC" stroke="#3338B5"/>
+    <text x="619" y="80">Appel IA</text>
+    <rect x="820" y="70" width="13" height="13" rx="3" fill="#ECFDF3" stroke="#16A34A"/>
+    <text x="839" y="80">État validé</text>
+  </g>
+
+  <!-- lane headers -->
+  <text x="290" y="118" text-anchor="middle" font-size="15" font-weight="700" fill="#0B5F58">Import d'un fichier existant</text>
+  <text x="910" y="118" text-anchor="middle" font-size="15" font-weight="700" fill="#23266E">Génération par description (IA)</text>
+
+  <!-- ===== Lane A ===== -->
+  <!-- A1 -->
+  <rect x="60" y="140" width="460" height="70" rx="10" fill="#F8FAFC" stroke="#94A3B8" stroke-dasharray="5,4" filter="url(#shadow)"/>
+  <text x="290" y="169" text-anchor="middle" font-size="13" font-weight="700" fill="#334155">Upload d'un fichier</text>
+  <text x="290" y="188" text-anchor="middle" font-size="11.5" fill="#475569">.docx · .pdf · .md · .txt (≤ 25 Mo)</text>
+
+  <!-- A2 -->
+  <rect x="60" y="240" width="460" height="70" rx="10" fill="#E6F7F5" stroke="#0F9488" filter="url(#shadow)"/>
+  <text x="290" y="269" text-anchor="middle" font-size="13" font-weight="700" fill="#0B5F58">FileIngestionService</text>
+  <text x="290" y="288" text-anchor="middle" font-size="11.5" fill="#0B5F58">Stockage MinIO + texte de secours (Apache Tika)</text>
+
+  <!-- A3 -->
+  <rect x="60" y="340" width="460" height="80" rx="10" fill="#E6F7F5" stroke="#0F9488" filter="url(#shadow)"/>
+  <text x="290" y="366" text-anchor="middle" font-size="13" font-weight="700" fill="#0B5F58">StructureExtractionService</text>
+  <text x="290" y="384" text-anchor="middle" font-size="11" fill="#0B5F58">Parsing déterministe : Apache POI / PDFBox / regex</text>
+  <text x="290" y="400" text-anchor="middle" font-size="11" font-style="italic" fill="#0F766E">aucune IA impliquée à cette étape</text>
+
+  <!-- ===== Lane B ===== -->
+  <!-- B1 -->
+  <rect x="680" y="140" width="460" height="70" rx="10" fill="#F8FAFC" stroke="#94A3B8" stroke-dasharray="5,4" filter="url(#shadow)"/>
+  <text x="910" y="169" text-anchor="middle" font-size="13" font-weight="700" fill="#334155">Description en langage naturel</text>
+  <text x="910" y="188" text-anchor="middle" font-size="11.5" font-style="italic" fill="#475569">« Rédige un rapport d'audit avec… »</text>
+
+  <!-- B2 -->
+  <rect x="680" y="240" width="460" height="70" rx="10" fill="#EEF0FC" stroke="#3338B5" filter="url(#shadow)"/>
+  <text x="910" y="269" text-anchor="middle" font-size="13" font-weight="700" fill="#23266E">PromptBuilder</text>
+  <text x="910" y="288" text-anchor="middle" font-size="11.5" fill="#23266E">.buildSkeletonSystemPrompt(description)</text>
+
+  <!-- B3 -->
+  <rect x="680" y="340" width="460" height="70" rx="10" fill="#EEF0FC" stroke="#3338B5" filter="url(#shadow)"/>
+  <text x="910" y="369" text-anchor="middle" font-size="13" font-weight="700" fill="#23266E">GenerationOrchestrator</text>
+  <text x="910" y="388" text-anchor="middle" font-size="11.5" fill="#23266E">→ AiProviderPort (OpenAI, Claude, Mistral, Gemini…)</text>
+
+  <!-- B4 -->
+  <rect x="680" y="440" width="460" height="70" rx="10" fill="#EEF0FC" stroke="#3338B5" filter="url(#shadow)"/>
+  <text x="910" y="469" text-anchor="middle" font-size="13" font-weight="700" fill="#23266E">SkeletonResponseParser</text>
+  <text x="910" y="488" text-anchor="middle" font-size="11.5" fill="#23266E">JSON brut → List&lt;StructureNode&gt;</text>
+
+  <!-- B5 -->
+  <rect x="680" y="540" width="460" height="90" rx="10" fill="#EEF0FC" stroke="#3338B5" filter="url(#shadow)"/>
+  <text x="910" y="566" text-anchor="middle" font-size="12.5" font-weight="700" fill="#23266E">SkeletonContentGuard.validate(tree)</text>
+  <text x="910" y="584" text-anchor="middle" font-size="11" fill="#23266E">Détecte le contenu rédigé (triche du modèle)</text>
+  <text x="910" y="601" text-anchor="middle" font-size="11" font-weight="700" fill="#B45309">échec → retry ×3 (prompt correctif)</text>
+
+  <!-- self-loop on B5 -->
+  <path d="M1140,555 C1205,555 1205,615 1140,615" fill="none" stroke="#B45309" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- ===== Convergence ===== -->
+  <rect x="150" y="690" width="900" height="90" rx="12" fill="#FFFFFF" stroke="#334155" stroke-width="2" filter="url(#shadow)"/>
+  <text x="600" y="717" text-anchor="middle" font-size="14" font-weight="700" fill="#1E293B">DocumentStructure.arbreJson</text>
+  <text x="600" y="736" text-anchor="middle" font-size="12" fill="#334155">List&lt;StructureNode&gt; — titres, sous-titres, tableaux, placeholders</text>
+  <text x="600" y="755" text-anchor="middle" font-size="12" fill="#334155">DocumentType.statut : EN_EXTRACTION → STRUCTURE_EXTRAITE (ou ECHEC_EXTRACTION)</text>
+
+  <!-- Review -->
+  <rect x="150" y="830" width="900" height="70" rx="12" fill="#F8FAFC" stroke="#94A3B8" stroke-dasharray="5,4" filter="url(#shadow)"/>
+  <text x="600" y="859" text-anchor="middle" font-size="13" font-weight="700" fill="#334155">Écran de révision — /documents-types/{id}/structure</text>
+  <text x="600" y="878" text-anchor="middle" font-size="12" fill="#475569">Édition manuelle de l'arbre · relance l'extraction si échec</text>
+
+  <!-- Final -->
+  <rect x="400" y="950" width="400" height="70" rx="35" fill="#ECFDF3" stroke="#16A34A" stroke-width="2" filter="url(#shadow)"/>
+  <text x="600" y="979" text-anchor="middle" font-size="15" font-weight="700" fill="#14532D">Valider &amp; activer</text>
+  <text x="600" y="998" text-anchor="middle" font-size="11.5" fill="#166534">statut = ACTIF · disponible dans « Nouveau document »</text>
+
+  <!-- ===== Arrows ===== -->
+  <g stroke="#64748B" stroke-width="2" fill="none">
+    <line x1="290" y1="210" x2="290" y2="240" marker-end="url(#arrow)"/>
+    <line x1="290" y1="310" x2="290" y2="340" marker-end="url(#arrow)"/>
+    <line x1="290" y1="420" x2="490" y2="690" marker-end="url(#arrow)"/>
+
+    <line x1="910" y1="210" x2="910" y2="240" marker-end="url(#arrow)"/>
+    <line x1="910" y1="310" x2="910" y2="340" marker-end="url(#arrow)"/>
+    <line x1="910" y1="410" x2="910" y2="440" marker-end="url(#arrow)"/>
+    <line x1="910" y1="510" x2="910" y2="540" marker-end="url(#arrow)"/>
+    <line x1="910" y1="630" x2="710" y2="690" marker-end="url(#arrow)"/>
+
+    <line x1="600" y1="780" x2="600" y2="830" marker-end="url(#arrow)"/>
+    <line x1="600" y1="900" x2="600" y2="950" marker-end="url(#arrow)"/>
+  </g>
+</svg>

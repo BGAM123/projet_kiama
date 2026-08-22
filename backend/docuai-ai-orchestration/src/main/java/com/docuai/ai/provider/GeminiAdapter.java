@@ -51,13 +51,14 @@ public class GeminiAdapter implements AiProviderPort {
 
     @Override
     public GenerationResult generate(GenerationRequest request) {
-        requireApiKey();
+        String effectiveKey = resolveApiKey(request);
+        requireApiKey(effectiveKey);
         String model = modelOf(request);
         Map<String, Object> body = buildBody(request);
         try {
             JsonNode response = webClient.post()
                     .uri(uri -> uri.path("/models/{model}:generateContent")
-                            .queryParam("key", properties.getApiKey())
+                            .queryParam("key", effectiveKey)
                             .build(model))
                     .bodyValue(body)
                     .retrieve()
@@ -81,13 +82,14 @@ public class GeminiAdapter implements AiProviderPort {
 
     @Override
     public Flux<Chunk> streamGenerate(GenerationRequest request) {
-        requireApiKey();
+        String effectiveKey = resolveApiKey(request);
+        requireApiKey(effectiveKey);
         String model = modelOf(request);
         Map<String, Object> body = buildBody(request);
         return webClient.post()
                 .uri(uri -> uri.path("/models/{model}:streamGenerateContent")
                         .queryParam("alt", "sse")
-                        .queryParam("key", properties.getApiKey())
+                        .queryParam("key", effectiveKey)
                         .build(model))
                 .bodyValue(body)
                 .retrieve()
@@ -135,8 +137,13 @@ public class GeminiAdapter implements AiProviderPort {
         return contents;
     }
 
-    private void requireApiKey() {
-        if (properties.getApiKey() == null || properties.getApiKey().isBlank()) {
+    private String resolveApiKey(GenerationRequest request) {
+        String override = request.getApiKeyOverride();
+        return (override != null && !override.isBlank()) ? override : properties.getApiKey();
+    }
+
+    private void requireApiKey(String effectiveKey) {
+        if (effectiveKey == null || effectiveKey.isBlank()) {
             throw new AiProviderException("GEMINI_API_KEY absente — configurez docuai.ai.gemini.api-key avant d'utiliser le fournisseur Gemini.");
         }
     }

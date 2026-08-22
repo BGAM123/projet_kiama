@@ -20,9 +20,15 @@ import java.util.UUID;
  * contrainte {@code chk_ai_fournisseur} de V1__init_schema.sql.
  * <p>
  * {@code referenceCleApi} est un POINTEUR (ex. nom de variable
- * d'environnement, "OPENAI_API_KEY") — jamais la clé API elle-même, qui
- * reste lue depuis {@code docuai.ai.*} (application.yml / secrets), pas
- * depuis la base (voir V2__seed_roles_permissions.sql pour des exemples).
+ * d'environnement, "OPENAI_API_KEY") — pas la clé API elle-même. Depuis
+ * V14__add_ai_model_config_encrypted_key.sql, une vraie clé peut en plus être
+ * saisie depuis l'admin UI et stockée chiffrée dans {@code cleApiChiffree}
+ * (AES-256-GCM, voir {@code ApiKeyCipherService} dans docuai-ai-orchestration)
+ * — {@code GenerationOrchestrator} la préfère si présente, sinon retombe sur
+ * {@code docuai.ai.*} (application.yml / secrets), comme avant. Le déchiffrement
+ * exige la clé maîtresse {@code docuai.ai.credentials-encryption-key} : sans
+ * elle, une clé stockée en base reste illisible (le fournisseur repasse alors
+ * sur la variable d'environnement, si définie).
  */
 @Entity
 @Table(name = "ai_model_config")
@@ -47,6 +53,14 @@ public class AiModelConfig {
 
     @Column(name = "reference_cle_api", length = 255)
     private String referenceCleApi;
+
+    /** Clé API réelle, chiffrée AES-256-GCM (Base64) — jamais exposée telle quelle en dehors de {@code ApiKeyCipherService}. */
+    @Column(name = "cle_api_chiffree", columnDefinition = "TEXT")
+    private String cleApiChiffree;
+
+    /** 4 derniers caractères en clair, pour affichage masqué côté UI ("•••• ab12") sans avoir à déchiffrer. */
+    @Column(name = "cle_api_apercu", length = 8)
+    private String cleApiApercu;
 
     @Column(name = "est_defaut", nullable = false)
     @Builder.Default

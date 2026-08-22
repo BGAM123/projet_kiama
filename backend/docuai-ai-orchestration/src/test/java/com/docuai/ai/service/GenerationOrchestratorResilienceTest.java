@@ -6,6 +6,7 @@ import com.docuai.ai.dto.GenerationResult;
 import com.docuai.ai.enums.AiProvider;
 import com.docuai.ai.exception.AiProviderException;
 import com.docuai.ai.port.AiProviderPort;
+import com.docuai.ai.security.ApiKeyCipherService;
 import com.docuai.core.model.AiModelConfig;
 import com.docuai.core.repository.AiModelConfigRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -68,8 +69,16 @@ class GenerationOrchestratorResilienceTest {
         }
 
         @Bean
-        GenerationOrchestrator generationOrchestrator(AiProviderFactory factory, AiModelConfigRepository repository) {
-            return new GenerationOrchestrator(factory, repository);
+        ApiKeyCipherService apiKeyCipherService() {
+            ApiKeyCipherService service = mock(ApiKeyCipherService.class);
+            when(service.isConfigured()).thenReturn(false);
+            return service;
+        }
+
+        @Bean
+        GenerationOrchestrator generationOrchestrator(AiProviderFactory factory, AiModelConfigRepository repository,
+                                                       ApiKeyCipherService apiKeyCipherService) {
+            return new GenerationOrchestrator(factory, repository, apiKeyCipherService);
         }
     }
 

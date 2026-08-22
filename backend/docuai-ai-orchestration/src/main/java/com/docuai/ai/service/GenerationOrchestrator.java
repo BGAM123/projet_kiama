@@ -6,6 +6,7 @@ import com.docuai.ai.dto.GenerationResult;
 import com.docuai.ai.enums.AiProvider;
 import com.docuai.ai.exception.AiProviderException;
 import com.docuai.ai.port.AiProviderPort;
+import com.docuai.ai.security.ApiKeyCipherService;
 import com.docuai.core.model.AiModelConfig;
 import com.docuai.core.repository.AiModelConfigRepository;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
@@ -14,6 +15,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
+
+import java.util.Optional;
 
 /**
  * Point d'entrée unique du Bloc 5 pour le Bloc 6 (chat/génération) : résout la
@@ -32,10 +35,13 @@ public class GenerationOrchestrator {
 
     private final AiProviderFactory providerFactory;
     private final AiModelConfigRepository aiModelConfigRepository;
+    private final ApiKeyCipherService apiKeyCipherService;
 
-    public GenerationOrchestrator(AiProviderFactory providerFactory, AiModelConfigRepository aiModelConfigRepository) {
+    public GenerationOrchestrator(AiProviderFactory providerFactory, AiModelConfigRepository aiModelConfigRepository,
+                                   ApiKeyCipherService apiKeyCipherService) {
         this.providerFactory = providerFactory;
         this.aiModelConfigRepository = aiModelConfigRepository;
+        this.apiKeyCipherService = apiKeyCipherService;
     }
 
     /**
@@ -120,9 +126,8 @@ public class GenerationOrchestrator {
         if (explicitProvider != null && !explicitProvider.isBlank()) {
             AiProvider provider = parseProvider(explicitProvider);
             if (providerFactory.isAvailable(provider)) {
-                String model = aiModelConfigRepository.findByFournisseurAndActifTrue(provider.name()).stream()
-                        .findFirst().map(AiModelConfig::getNomModele).orElse(null);
-                return new ResolvedConfig(provider, model);
+                Optional<AiModelConfig> config = aiModelConfigRepository.findByFournisseurAndActifTrue(provider.name()).stream().findFirst();
+                return toResolvedConfig(provider, config.orElse(null));
             }
             log.warn("Fournisseur IA demandé explicitement indisponible ({}), repli sur le fournisseur par défaut.", provider);
         }
@@ -134,7 +139,23 @@ public class GenerationOrchestrator {
             throw new AiProviderException("Le fournisseur IA par défaut (" + provider
                     + ") n'est pas disponible (clé API absente ou adaptateur non branché).");
         }
-        return new ResolvedConfig(provider, defaultConfig.getNomModele());
+        return toResolvedConfig(provider, defaultConfig);
+    }
+
+    /**
+     * Déchiffre la clé API stockée pour {@code config} si elle existe et que la
+     * clé maîtresse ({@code docuai.ai.credentials-encryption-key}) est
+     * configurée — sinon {@code apiKeyOverride} reste null et l'adaptateur
+     * retombe sur sa clé issue de {@code docuai.ai.*} (variable d'environnement).
+     */
+    private ResolvedConfig toResolvedConfig(AiProvider provider, AiModelConfig config) {
+        String model = config != null ? config.getNomModele() : null;
+        String apiKeyOverride = null;
+        if (config != null && config.getCleApiChiffree() != null && !config.getCleApiChiffree().isBlank()
+                && apiKeyCipherService.isConfigured()) {
+            apiKeyOverride = apiKeyCipherService.decrypt(config.getCleApiChiffree());
+        }
+        return new ResolvedConfig(provider, model, apiKeyOverride);
     }
 
     private AiProvider parseProvider(String raw) {
@@ -150,8 +171,9 @@ public class GenerationOrchestrator {
         return request.toBuilder()
                 .provider(resolved.provider().name())
                 .model(hasModel ? request.getModel() : resolved.model())
+                .apiKeyOverride(resolved.apiKeyOverride())
                 .build();
     }
 
-    private record ResolvedConfig(AiProvider provider, String model) {}
+    private record ResolvedConfig(AiProvider provider, String model, String apiKeyOverride) {}
 }

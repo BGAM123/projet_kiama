@@ -133,7 +133,7 @@ export default function AdminCategoriesPage() {
         description="Référentiel des catégories utilisées pour classer les Documents Types."
         icon={FolderTree}
         actions={
-          <Button className="bg-accent text-accent-foreground hover:bg-accent/90" onClick={openCreate}>
+          <Button onClick={openCreate}>
             <Plus className="mr-2 h-4 w-4" /> Nouvelle catégorie
           </Button>
         }
@@ -228,7 +228,7 @@ export default function AdminCategoriesPage() {
             )}
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>Annuler</Button>
-              <Button type="submit" disabled={pending} className="bg-accent text-accent-foreground hover:bg-accent/90">
+              <Button type="submit" disabled={pending}>
                 {pending ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Enregistrement…</> : 'Enregistrer'}
               </Button>
             </DialogFooter>

@@ -169,7 +169,7 @@ export default function ImportDocumentTypePage() {
               onDragLeave={() => setDragging(false)}
               onDrop={(e) => { e.preventDefault(); setDragging(false); handleFiles(e.dataTransfer.files); }}
               className={`flex flex-col items-center justify-center gap-3 rounded-lg border-2 border-dashed px-6 py-12 text-center transition-colors ${
-                dragging ? 'border-accent bg-accent/10' : 'border-border hover:border-accent/60 hover:bg-muted/30'
+                dragging ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50 hover:bg-muted/30'
               }`}
             >
               <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-primary">
@@ -241,7 +241,7 @@ export default function ImportDocumentTypePage() {
               <ul className="space-y-1.5 text-sm">
                 {STEPS.map((s, i) => (
                   <li key={s} className="flex items-center gap-2">
-                    {i < stepIndex || done ? <CheckCircle2 className="h-4 w-4 text-success" /> : i === stepIndex ? <Loader2 className="h-4 w-4 animate-spin text-accent" /> : <div className="h-4 w-4 rounded-full border border-border" />}
+                    {i < stepIndex || done ? <CheckCircle2 className="h-4 w-4 text-success" /> : i === stepIndex ? <Loader2 className="h-4 w-4 animate-spin text-primary" /> : <div className="h-4 w-4 rounded-full border border-border" />}
                     <span className={i <= stepIndex || done ? 'text-foreground' : 'text-muted-foreground'}>{s}</span>
                   </li>
                 ))}
@@ -252,7 +252,7 @@ export default function ImportDocumentTypePage() {
 
         <div className="flex justify-end gap-3">
           <Button asChild variant="outline" type="button"><Link href="/documents-types">Annuler</Link></Button>
-          <Button type="submit" disabled={!file || extracting || done} className="bg-accent text-accent-foreground hover:bg-accent/90">
+          <Button type="submit" disabled={!file || extracting || done}>
             {extracting ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Extraction…</> : <><FileUp className="mr-2 h-4 w-4" /> Lancer l'extraction</>}
           </Button>
         </div>
