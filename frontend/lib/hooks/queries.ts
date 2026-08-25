@@ -16,6 +16,7 @@ import {
   listNotifications,
   listMessages,
   listReferenceDocuments,
+  listDocumentReferences,
 } from '@/lib/api/client';
 import { useAuth } from '@/lib/auth-store';
 import type {
@@ -141,5 +142,14 @@ export function useRefDocuments(conversationId: string | null) {
     queryKey: ['ref-docs', conversationId],
     queryFn: async () => (await listReferenceDocuments(conversationId!)).data as ReferenceDocument[],
     enabled: !!conversationId,
+  });
+}
+
+/** Documents de référence attachés directement à un Document en cours d'édition (enrichissent les prompts "Améliorer avec l'IA"). */
+export function useDocumentReferences(documentId: string | null) {
+  return useQuery<ReferenceDocument[]>({
+    queryKey: ['document-refs', documentId],
+    queryFn: async () => (await listDocumentReferences(documentId!)).data as ReferenceDocument[],
+    enabled: !!documentId,
   });
 }

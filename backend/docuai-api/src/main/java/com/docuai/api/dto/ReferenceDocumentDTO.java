@@ -11,6 +11,7 @@ import java.util.UUID;
 public class ReferenceDocumentDTO {
     private UUID id;
     private UUID conversationId;
+    private UUID documentId;
     private String fileName;
     private String storagePath;
     private String importedAt;

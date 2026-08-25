@@ -121,7 +121,9 @@ export interface Message {
 
 export interface ReferenceDocument {
   id: string;
-  conversationId: string;
+  /** Exactement l'un des deux est renseigné selon que le document de référence est attaché à une conversation ou à un document. */
+  conversationId?: string;
+  documentId?: string;
   fileName: string;
   storagePath: string;
   importedAt: string;

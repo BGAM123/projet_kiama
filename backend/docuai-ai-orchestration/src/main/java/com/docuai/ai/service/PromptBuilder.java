@@ -64,6 +64,27 @@ public class PromptBuilder {
                 + "moyenne (60-75) si le texte d'origine est ambigu ou incomplet, faible (< 60) si tu as dû deviner l'intention de l'auteur.";
     }
 
+    /**
+     * Prompt système du composer IA de l'éditeur (« Documents de référence »,
+     * panneau fixe sous l'éditeur) : contrairement à {@link
+     * #buildSectionImprovementSystemPrompt} (reformule un texte déjà écrit,
+     * sans ajouter d'information), ici l'IA RÉDIGE du contenu neuf à partir
+     * d'une instruction libre — insertion directe à la position du curseur,
+     * sans étape de suggestion/validation. Réponse en texte brut (paragraphes
+     * séparés par une ligne vide) plutôt qu'un schéma JSON : pas de score de
+     * confiance à porter ici, {@code DocumentService#generateAtCursor} le
+     * convertit lui-même en HTML avant de le renvoyer au client.
+     */
+    public String buildFreeformGenerationSystemPrompt(String language, String tone) {
+        return "Tu es un assistant de rédaction de documents professionnels. "
+                + "Réponds exclusivement dans la langue suivante : " + (language == null ? "FR" : language) + ". "
+                + "Adopte un ton " + (tone == null ? "neutre" : tone.toLowerCase()) + ". "
+                + "Rédige le contenu demandé par l'utilisateur, prêt à être inséré tel quel à l'endroit du curseur dans le document en cours de rédaction. "
+                + "Si des extraits de documents de référence sont fournis, appuie-toi dessus comme source. "
+                + "Réponds UNIQUEMENT avec le texte à insérer (un ou plusieurs paragraphes séparés par une ligne vide si besoin), "
+                + "sans préambule, sans commentaire, sans balise Markdown ni HTML.";
+    }
+
     public String buildUserPrompt(String userInstructions, List<DocumentChunk> referenceChunks) {
         if (referenceChunks == null || referenceChunks.isEmpty()) {
             return userInstructions;

@@ -4,11 +4,15 @@ import com.docuai.api.dto.ApiResponse;
 import com.docuai.api.dto.CreateDocumentRequest;
 import com.docuai.api.dto.DocumentDTO;
 import com.docuai.api.dto.DocumentSectionDTO;
+import com.docuai.api.dto.GenerateAtCursorRequest;
 import com.docuai.api.dto.GenerateDocumentRequest;
+import com.docuai.api.dto.GeneratedContentDTO;
 import com.docuai.api.dto.ImproveTextRequest;
+import com.docuai.api.dto.ReferenceDocumentDTO;
 import com.docuai.api.dto.SectionSuggestionDTO;
 import com.docuai.api.dto.UpdateDocumentContentRequest;
 import com.docuai.api.dto.UpdateSectionContentRequest;
+import com.docuai.api.service.DocumentReferenceService;
 import com.docuai.api.service.DocumentSectionService;
 import com.docuai.api.service.DocumentService;
 import com.docuai.export.ExportFormat;
@@ -26,6 +30,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -45,10 +50,13 @@ public class DocumentController {
 
     private final DocumentService documentService;
     private final DocumentSectionService documentSectionService;
+    private final DocumentReferenceService documentReferenceService;
 
-    public DocumentController(DocumentService documentService, DocumentSectionService documentSectionService) {
+    public DocumentController(DocumentService documentService, DocumentSectionService documentSectionService,
+                               DocumentReferenceService documentReferenceService) {
         this.documentService = documentService;
         this.documentSectionService = documentSectionService;
+        this.documentReferenceService = documentReferenceService;
     }
 
     @PostMapping
@@ -132,6 +140,54 @@ public class DocumentController {
             @AuthenticationPrincipal UserDetailsImpl principal) {
         return ResponseEntity.ok(ApiResponse.success(documentService.improveSelection(
                 id, request.getText(), principal.getUtilisateur().getId(), isAdmin(principal))));
+    }
+
+    @PostMapping("/{id}/generate-at-cursor")
+    @PreAuthorize("hasAuthority('DOCUMENT_EDIT_OWN')")
+    @Operation(summary = "Générer du contenu avec l'IA à partir d'une instruction libre (composer), enrichi par les documents de référence, prêt à insérer au curseur")
+    public ResponseEntity<ApiResponse<GeneratedContentDTO>> generateAtCursor(
+            @PathVariable UUID id, @Valid @RequestBody GenerateAtCursorRequest request,
+            @AuthenticationPrincipal UserDetailsImpl principal) {
+        GeneratedContentDTO dto = new GeneratedContentDTO();
+        dto.setContentHtml(documentService.generateAtCursor(
+                id, request.getInstruction(), principal.getUtilisateur().getId(), isAdmin(principal)));
+        return ResponseEntity.ok(ApiResponse.success(dto));
+    }
+
+    /**
+     * Documents de référence attachés à ce document (Bloc 5, RAG) : leur
+     * contenu enrichit automatiquement les prompts des deux points
+     * d'amélioration IA de l'éditeur ({@link #improveSelection} et {@code
+     * DocumentSectionService#improve}) — aucune action supplémentaire
+     * requise une fois le fichier importé.
+     */
+    @GetMapping("/{id}/reference-documents")
+    @PreAuthorize("hasAuthority('DOCUMENT_EDIT_OWN')")
+    @Operation(summary = "Lister les documents de référence attachés à ce document (contexte IA)")
+    public ResponseEntity<ApiResponse<List<ReferenceDocumentDTO>>> listReferenceDocuments(
+            @PathVariable UUID id, @AuthenticationPrincipal UserDetailsImpl principal) {
+        return ResponseEntity.ok(ApiResponse.success(
+                documentReferenceService.listReferenceDocuments(id, principal.getUtilisateur().getId(), isAdmin(principal))));
+    }
+
+    @PostMapping(value = "/{id}/reference-documents", consumes = "multipart/form-data")
+    @PreAuthorize("hasAuthority('DOCUMENT_EDIT_OWN')")
+    @Operation(summary = "Importer un document de référence (indexé pour le RAG, enrichit les prompts IA de ce document)")
+    public ResponseEntity<ApiResponse<ReferenceDocumentDTO>> addReferenceDocument(
+            @PathVariable UUID id, @RequestParam("file") MultipartFile file,
+            @AuthenticationPrincipal UserDetailsImpl principal) {
+        return ResponseEntity.ok(ApiResponse.success(
+                documentReferenceService.addReferenceDocument(id, file, principal.getUtilisateur().getId(), isAdmin(principal))));
+    }
+
+    @DeleteMapping("/{id}/reference-documents/{referenceId}")
+    @PreAuthorize("hasAuthority('DOCUMENT_EDIT_OWN')")
+    @Operation(summary = "Retirer un document de référence de ce document")
+    public ResponseEntity<ApiResponse<Map<String, String>>> deleteReferenceDocument(
+            @PathVariable UUID id, @PathVariable UUID referenceId,
+            @AuthenticationPrincipal UserDetailsImpl principal) {
+        documentReferenceService.deleteReferenceDocument(id, referenceId, principal.getUtilisateur().getId(), isAdmin(principal));
+        return ResponseEntity.ok(ApiResponse.success(Map.of("id", referenceId.toString())));
     }
 
     @PutMapping("/{id}/sections/{sectionId}")

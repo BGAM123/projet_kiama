@@ -11,6 +11,7 @@ import java.util.List;
 public interface ReferenceDocumentMapper {
 
     @Mapping(target = "conversationId", source = "conversation.id")
+    @Mapping(target = "documentId", source = "document.id")
     @Mapping(target = "fileName", source = "nomFichier")
     @Mapping(target = "storagePath", source = "cheminStockage")
     @Mapping(target = "importedAt", source = "dateImport")

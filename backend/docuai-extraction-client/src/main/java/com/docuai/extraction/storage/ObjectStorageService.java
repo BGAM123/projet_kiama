@@ -7,6 +7,7 @@ import io.minio.GetPresignedObjectUrlArgs;
 import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
+import io.minio.RemoveObjectArgs;
 import io.minio.http.Method;
 import org.springframework.stereotype.Service;
 
@@ -56,6 +57,18 @@ public class ObjectStorageService {
             return in.readAllBytes();
         } catch (Exception e) {
             throw new ObjectStorageException("Échec du téléchargement du fichier source depuis le stockage objet (MinIO).", e);
+        }
+    }
+
+    /** Supprime un objet précédemment stocké (ex. suppression d'un document de référence). */
+    public void delete(String bucket, String objectKey) {
+        try {
+            minioClient.removeObject(RemoveObjectArgs.builder()
+                    .bucket(bucket)
+                    .object(objectKey)
+                    .build());
+        } catch (Exception e) {
+            throw new ObjectStorageException("Échec de la suppression du fichier sur le stockage objet (MinIO).", e);
         }
     }
 

@@ -16,6 +16,7 @@ import com.docuai.api.exception.NotFoundException;
 import com.docuai.api.mapper.DocumentMapper;
 import com.docuai.api.mapper.DocumentSectionMapper;
 import com.docuai.core.model.Document;
+import com.docuai.core.model.DocumentReference;
 import com.docuai.core.model.DocumentSection;
 import com.docuai.core.model.DocumentSectionStatut;
 import com.docuai.core.model.DocumentSectionType;
@@ -25,6 +26,7 @@ import com.docuai.core.model.DocumentType;
 import com.docuai.core.model.StructureNode;
 import com.docuai.core.model.TableColumnDef;
 import com.docuai.core.model.Utilisateur;
+import com.docuai.core.repository.DocumentReferenceRepository;
 import com.docuai.core.repository.DocumentRepository;
 import com.docuai.core.repository.DocumentSectionRepository;
 import com.docuai.core.repository.DocumentStructureRepository;
@@ -67,8 +69,11 @@ public class DocumentService {
     private static final Logger log = LoggerFactory.getLogger(DocumentService.class);
     /** Même borne que {@code DocumentTypeGenerationService} : un JSON malformé déclenche une nouvelle tentative, jamais un contenu incomplet. */
     private static final int CONTENT_GENERATION_MAX_ATTEMPTS = 3;
+    /** Taille de l'historique par utilisateur : au-delà, les documents les plus anciens sont purgés automatiquement (DB + stockage objet) — voir {@link #enforceHistoryLimit}. */
+    private static final int MAX_HISTORY_DOCUMENTS = 20;
 
     private final DocumentRepository documentRepository;
+    private final DocumentReferenceRepository documentReferenceRepository;
     private final DocumentSectionRepository documentSectionRepository;
     private final DocumentTypeRepository documentTypeRepository;
     private final DocumentStructureRepository documentStructureRepository;
@@ -85,8 +90,10 @@ public class DocumentService {
     private final ExportService exportService;
     private final ObjectStorageService objectStorageService;
     private final MinioProperties minioProperties;
+    private final DocumentReferenceContextService documentReferenceContextService;
 
     public DocumentService(DocumentRepository documentRepository,
+                            DocumentReferenceRepository documentReferenceRepository,
                             DocumentSectionRepository documentSectionRepository,
                             DocumentTypeRepository documentTypeRepository,
                             DocumentStructureRepository documentStructureRepository,
@@ -102,8 +109,10 @@ public class DocumentService {
                             DocxHtmlImporter docxHtmlImporter,
                             ExportService exportService,
                             ObjectStorageService objectStorageService,
-                            MinioProperties minioProperties) {
+                            MinioProperties minioProperties,
+                            DocumentReferenceContextService documentReferenceContextService) {
         this.documentRepository = documentRepository;
+        this.documentReferenceRepository = documentReferenceRepository;
         this.documentSectionRepository = documentSectionRepository;
         this.documentTypeRepository = documentTypeRepository;
         this.documentStructureRepository = documentStructureRepository;
@@ -120,6 +129,7 @@ public class DocumentService {
         this.exportService = exportService;
         this.objectStorageService = objectStorageService;
         this.minioProperties = minioProperties;
+        this.documentReferenceContextService = documentReferenceContextService;
     }
 
     @Transactional
@@ -147,6 +157,7 @@ public class DocumentService {
         List<DocumentSection> sections = new ArrayList<>();
         flatten(structure.getArbreJson(), document, null, sections);
         documentSectionRepository.saveAll(sections);
+        enforceHistoryLimit(currentUser.getId());
 
         return toDto(document, sections);
     }
@@ -181,24 +192,29 @@ public class DocumentService {
                 .contentHtml(contentHtml)
                 .build();
         document = documentRepository.save(document);
+        enforceHistoryLimit(currentUser.getId());
 
         return toDto(document, List.of());
     }
 
     /**
-     * Troisième point d'entrée de la rédaction, à côté de {@link #create}
-     * (squelette vide) et {@link #importDocument} (fichier existant) : le plan
-     * d'un Document Type déjà choisi, rempli par l'IA à partir d'une
-     * description en langage naturel de ce que l'utilisateur veut obtenir —
-     * même principe que "Générer avec l'IA" pour un Document Type ({@code
+     * Point d'entrée unique de la rédaction à partir d'un Document Type — a
+     * remplacé {@link #create} (squelette vide), resté à côté de {@link
+     * #importDocument} (fichier existant) : le plan d'un Document Type déjà
+     * choisi, optionnellement rempli par l'IA à partir d'une description en
+     * langage naturel de ce que l'utilisateur veut obtenir — même principe que
+     * "Générer avec l'IA" pour un Document Type ({@code
      * DocumentTypeGenerationService}), mais ici le plan est déjà fixé : le LLM
      * ne produit que le contenu, jamais la structure.
      * <p>
-     * Le document est créé même si la génération échoue après {@link
+     * Description vide/absente : l'IA n'est pas appelée du tout (pas d'appel
+     * inutile), le document est créé en {@code BROUILLON} avec un squelette
+     * vide — exactement le comportement de l'ancien {@link #create}. Sinon, le
+     * document est créé même si la génération échoue après {@link
      * #CONTENT_GENERATION_MAX_ATTEMPTS} tentatives (JSON malformé, fournisseur
-     * IA indisponible) — dégradation vers un squelette vide plutôt qu'une
-     * erreur, cohérent avec {@link #create}. Une réponse partielle (le modèle a
-     * oublié certaines sections) n'est pas non plus un échec : {@link
+     * IA indisponible) — même dégradation vers un squelette vide (donc
+     * {@code BROUILLON}), plutôt qu'une erreur. Une réponse partielle (le
+     * modèle a oublié certaines sections) n'est pas non plus un échec : {@link
      * DocumentContentHtmlBuilder} retombe section par section sur le rendu
      * vide du squelette pour tout {@code id} absent de la réponse.
      */
@@ -213,23 +229,70 @@ public class DocumentService {
         Document document = Document.builder()
                 .documentType(documentType)
                 .utilisateur(currentUser)
-                // Contenu déjà produit par l'IA, jamais un squelette vierge :
-                // le document part directement en SAUVEGARDE, pas en BROUILLON.
-                .statut(DocumentStatut.SAUVEGARDE)
                 .titre(request.getName())
                 .build();
 
-        Map<String, GeneratedSectionContent> generated = generateSectionContents(
-                documentType.getNom(), request.getDescription(), tree,
-                document.getLangue().name(), document.getTon().name());
+        boolean hasDescription = request.getDescription() != null && !request.getDescription().isBlank();
+        Map<String, GeneratedSectionContent> generated = hasDescription
+                ? generateSectionContents(documentType.getNom(), request.getDescription(), tree,
+                        document.getLangue().name(), document.getTon().name())
+                : Map.of();
+
+        // Contenu réellement produit par l'IA -> SAUVEGARDE ; sans description
+        // ou génération épuisée -> BROUILLON, comme un squelette vide créé
+        // sans IA (cf. #create).
+        document.setStatut(generated.isEmpty() ? DocumentStatut.BROUILLON : DocumentStatut.SAUVEGARDE);
         document.setContentHtml(documentContentHtmlBuilder.build(tree, generated));
         document = documentRepository.save(document);
 
         List<DocumentSection> sections = new ArrayList<>();
         flatten(tree, document, null, sections);
         documentSectionRepository.saveAll(sections);
+        enforceHistoryLimit(currentUser.getId());
 
         return toDto(document, sections);
+    }
+
+    /**
+     * Purge l'historique d'un utilisateur au-delà de {@link #MAX_HISTORY_DOCUMENTS}
+     * documents (les plus récents conservés) — appelée après chaque création
+     * ({@link #create}, {@link #importDocument}, {@link #generateContent}), pas
+     * seulement à la lecture : l'historique ne doit jamais dépasser la limite,
+     * même si l'utilisateur ne revisite jamais l'écran d'historique. Purge
+     * réelle, pas un archivage : le document (sections, documents de référence,
+     * chunks RAG — cascade DB, V9/V15) et ses fichiers MinIO (export, documents
+     * de référence) sont définitivement supprimés.
+     */
+    private void enforceHistoryLimit(UUID userId) {
+        List<Document> documents = documentRepository.findByUtilisateur_IdOrderByDateCreationDesc(userId);
+        if (documents.size() <= MAX_HISTORY_DOCUMENTS) {
+            return;
+        }
+        for (Document toDelete : documents.subList(MAX_HISTORY_DOCUMENTS, documents.size())) {
+            deleteDocumentAndStorage(toDelete);
+        }
+    }
+
+    /** Supprime les fichiers MinIO liés (export + documents de référence) avant la ligne document elle-même (cascade DB pour sections/références/chunks). */
+    private void deleteDocumentAndStorage(Document document) {
+        for (DocumentReference reference : documentReferenceRepository.findByDocument_IdOrderByDateImportAsc(document.getId())) {
+            try {
+                objectStorageService.delete(minioProperties.getBucketReferences(), reference.getCheminStockage());
+            } catch (Exception e) {
+                log.warn("Suppression MinIO impossible pour le document de référence {} (document {} purgé de l'historique) : {}",
+                        reference.getId(), document.getId(), e.getMessage());
+            }
+        }
+        if (document.getMinioObjectKey() != null && !document.getMinioObjectKey().isBlank()) {
+            try {
+                objectStorageService.delete(minioProperties.getBucketExports(), document.getMinioObjectKey());
+            } catch (Exception e) {
+                log.warn("Suppression MinIO impossible pour l'export du document {} (purgé de l'historique) : {}",
+                        document.getId(), e.getMessage());
+            }
+        }
+        documentRepository.delete(document);
+        log.info("history_prune documentId={} userId={}", document.getId(), document.getUtilisateur().getId());
     }
 
     /**
@@ -344,7 +407,7 @@ public class DocumentService {
                 .systemPrompt(promptBuilder.buildSectionImprovementSystemPrompt(
                         document.getLangue() != null ? document.getLangue().name() : null,
                         document.getTon() != null ? document.getTon().name() : null))
-                .userPrompt(text)
+                .userPrompt(documentReferenceContextService.enrich(id, text))
                 .build();
         SectionImprovement improvement = sectionImprovementResponseParser.parse(
                 generationOrchestrator.generate(request).getContent());
@@ -356,6 +419,31 @@ public class DocumentService {
         dto.setAiSuggestedContent(improvement.getContent());
         dto.setConfidenceScore(improvement.getConfidence());
         return dto;
+    }
+
+    /**
+     * Composer IA de l'éditeur (panneau « Documents de référence » fixé sous
+     * l'éditeur) : à partir d'une instruction libre, enrichie par le contexte
+     * RAG des documents de référence attachés à ce document ({@link
+     * DocumentReferenceContextService}), génère du contenu prêt à insérer à la
+     * position du curseur côté client — jamais persisté ici, contrairement à
+     * {@link #generateContent} : c'est {@code updateDocumentContent} (autosave)
+     * qui sauvegardera le HTML final une fois le contenu inséré dans l'éditeur.
+     */
+    @Transactional(readOnly = true)
+    public String generateAtCursor(UUID id, String instruction, UUID requestingUserId, boolean isAdmin) {
+        Document document = findEntity(id);
+        checkOwnership(document, requestingUserId, isAdmin);
+
+        String systemPrompt = promptBuilder.buildFreeformGenerationSystemPrompt(
+                document.getLangue() != null ? document.getLangue().name() : null,
+                document.getTon() != null ? document.getTon().name() : null);
+        GenerationRequest request = GenerationRequest.builder()
+                .systemPrompt(systemPrompt)
+                .userPrompt(documentReferenceContextService.enrich(id, instruction))
+                .build();
+        String raw = generationOrchestrator.generate(request).getContent();
+        return plainTextToHtml(raw);
     }
 
     @Transactional(readOnly = true)

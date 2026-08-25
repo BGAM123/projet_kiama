@@ -8,6 +8,7 @@ import com.docuai.api.dto.GenerateDocumentRequest;
 import com.docuai.api.mapper.DocumentMapper;
 import com.docuai.api.mapper.DocumentSectionMapper;
 import com.docuai.core.model.Document;
+import com.docuai.core.model.DocumentReference;
 import com.docuai.core.model.DocumentSection;
 import com.docuai.core.model.DocumentStatut;
 import com.docuai.core.model.DocumentStructure;
@@ -33,6 +34,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.security.access.AccessDeniedException;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -41,7 +43,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -55,6 +59,7 @@ import static org.mockito.Mockito.when;
 class DocumentServiceTest {
 
     @Mock private DocumentRepository documentRepository;
+    @Mock private com.docuai.core.repository.DocumentReferenceRepository documentReferenceRepository;
     @Mock private DocumentSectionRepository documentSectionRepository;
     @Mock private DocumentTypeRepository documentTypeRepository;
     @Mock private DocumentStructureRepository documentStructureRepository;
@@ -69,6 +74,7 @@ class DocumentServiceTest {
     @Mock private ExportService exportService;
     @Mock private ObjectStorageService objectStorageService;
     @Mock private MinioProperties minioProperties;
+    @Mock private DocumentReferenceContextService documentReferenceContextService;
 
     private DocumentService service;
 
@@ -80,11 +86,12 @@ class DocumentServiceTest {
         // Constructeur réel plutôt que mock : c'est une fonction pure sur
         // l'arbre de structure, dont la sortie est justement ce qu'on veut
         // vérifier à la création.
-        service = new DocumentService(documentRepository, documentSectionRepository, documentTypeRepository,
+        service = new DocumentService(documentRepository, documentReferenceRepository, documentSectionRepository, documentTypeRepository,
                 documentStructureRepository, documentMapper, documentSectionMapper,
                 new DocumentSkeletonHtmlBuilder(new DocumentContentHtmlBuilder()), new DocumentContentHtmlBuilder(),
                 generationOrchestrator, promptBuilder, sectionImprovementResponseParser, documentContentResponseParser,
-                fileIngestionService, docxHtmlImporter, exportService, objectStorageService, minioProperties);
+                fileIngestionService, docxHtmlImporter, exportService, objectStorageService, minioProperties,
+                documentReferenceContextService);
     }
 
     private DocumentType documentType() {
@@ -135,6 +142,70 @@ class DocumentServiceTest {
         assertThat(table.getParentSection()).isEqualTo(title);
         assertThat(table.getOrderIndex()).isEqualTo(2);
         assertThat(table.getTableColumns()).extracting("name").containsExactly("Indicateur");
+    }
+
+    /** Au-delà de 20 documents pour l'utilisateur, le plus ancien doit être purgé — DB (delete) et stockage objet (export + documents de référence). */
+    @Test
+    void create_prunesOldestDocumentBeyondHistoryLimit_includingItsStorage() {
+        when(documentTypeRepository.findById(documentTypeId)).thenReturn(Optional.of(documentType()));
+        when(documentStructureRepository.findByDocumentType_Id(documentTypeId))
+                .thenReturn(Optional.of(DocumentStructure.builder().arbreJson(sampleTree()).build()));
+        when(documentRepository.save(any(Document.class))).thenAnswer(inv -> {
+            Document d = inv.getArgument(0);
+            if (d.getId() == null) d.setId(UUID.randomUUID());
+            return d;
+        });
+        when(documentSectionRepository.saveAll(anyList())).thenAnswer(inv -> inv.getArgument(0));
+        when(documentMapper.toDto(any(Document.class))).thenReturn(mock(DocumentDTO.class));
+
+        // 21 documents déjà en historique (ordre décroissant de date, comme le tri réel) : le 21e (le plus ancien) dépasse la limite de 20 et doit être purgé.
+        List<Document> existing = new ArrayList<>();
+        for (int i = 0; i < 20; i++) {
+            existing.add(Document.builder().id(UUID.randomUUID()).utilisateur(user).build());
+        }
+        Document oldest = Document.builder().id(UUID.randomUUID()).utilisateur(user).minioObjectKey("exports/old.docx").build();
+        existing.add(oldest);
+        when(documentRepository.findByUtilisateur_IdOrderByDateCreationDesc(user.getId())).thenReturn(existing);
+
+        DocumentReference oldestReference = DocumentReference.builder()
+                .id(UUID.randomUUID()).document(oldest).cheminStockage("references/old-ref.pdf").build();
+        when(documentReferenceRepository.findByDocument_IdOrderByDateImportAsc(oldest.getId())).thenReturn(List.of(oldestReference));
+
+        CreateDocumentRequest request = new CreateDocumentRequest();
+        request.setDocumentTypeId(documentTypeId);
+        service.create(request, user);
+
+        verify(documentRepository).delete(oldest);
+        verify(objectStorageService).delete(any(), eq("exports/old.docx"));
+        verify(objectStorageService).delete(any(), eq("references/old-ref.pdf"));
+    }
+
+    /** À 20 documents ou moins, aucune purge : la limite ne doit jamais supprimer un historique qui ne la dépasse pas. */
+    @Test
+    void create_doesNotPruneAnything_whenHistoryIsAtOrBelowLimit() {
+        when(documentTypeRepository.findById(documentTypeId)).thenReturn(Optional.of(documentType()));
+        when(documentStructureRepository.findByDocumentType_Id(documentTypeId))
+                .thenReturn(Optional.of(DocumentStructure.builder().arbreJson(sampleTree()).build()));
+        when(documentRepository.save(any(Document.class))).thenAnswer(inv -> {
+            Document d = inv.getArgument(0);
+            if (d.getId() == null) d.setId(UUID.randomUUID());
+            return d;
+        });
+        when(documentSectionRepository.saveAll(anyList())).thenAnswer(inv -> inv.getArgument(0));
+        when(documentMapper.toDto(any(Document.class))).thenReturn(mock(DocumentDTO.class));
+
+        List<Document> existing = new ArrayList<>();
+        for (int i = 0; i < 20; i++) {
+            existing.add(Document.builder().id(UUID.randomUUID()).utilisateur(user).build());
+        }
+        when(documentRepository.findByUtilisateur_IdOrderByDateCreationDesc(user.getId())).thenReturn(existing);
+
+        CreateDocumentRequest request = new CreateDocumentRequest();
+        request.setDocumentTypeId(documentTypeId);
+        service.create(request, user);
+
+        verify(documentRepository, never()).delete(any());
+        verifyNoInteractions(objectStorageService);
     }
 
     /**

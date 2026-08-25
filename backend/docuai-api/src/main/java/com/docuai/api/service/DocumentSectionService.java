@@ -47,19 +47,22 @@ public class DocumentSectionService {
     private final GenerationOrchestrator generationOrchestrator;
     private final PromptBuilder promptBuilder;
     private final SectionImprovementResponseParser sectionImprovementResponseParser;
+    private final DocumentReferenceContextService documentReferenceContextService;
 
     public DocumentSectionService(DocumentSectionRepository documentSectionRepository,
                                    DocumentSectionHistoryRepository documentSectionHistoryRepository,
                                    DocumentSectionMapper documentSectionMapper,
                                    GenerationOrchestrator generationOrchestrator,
                                    PromptBuilder promptBuilder,
-                                   SectionImprovementResponseParser sectionImprovementResponseParser) {
+                                   SectionImprovementResponseParser sectionImprovementResponseParser,
+                                   DocumentReferenceContextService documentReferenceContextService) {
         this.documentSectionRepository = documentSectionRepository;
         this.documentSectionHistoryRepository = documentSectionHistoryRepository;
         this.documentSectionMapper = documentSectionMapper;
         this.generationOrchestrator = generationOrchestrator;
         this.promptBuilder = promptBuilder;
         this.sectionImprovementResponseParser = sectionImprovementResponseParser;
+        this.documentReferenceContextService = documentReferenceContextService;
     }
 
     @Transactional
@@ -95,7 +98,7 @@ public class DocumentSectionService {
                 document.getTon() != null ? document.getTon().name() : null);
         GenerationRequest request = GenerationRequest.builder()
                 .systemPrompt(systemPrompt)
-                .userPrompt(section.getUserContent())
+                .userPrompt(documentReferenceContextService.enrich(document.getId(), section.getUserContent()))
                 .build();
 
         SectionImprovement improvement = sectionImprovementResponseParser.parse(

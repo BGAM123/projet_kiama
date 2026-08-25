@@ -9,11 +9,11 @@ import {
   useRef,
   useState,
 } from 'react';
-import { useEditor, EditorContent, type Editor } from '@tiptap/react';
+import { useEditor, EditorContent, ReactNodeViewRenderer, type Editor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Placeholder from '@tiptap/extension-placeholder';
 import CharacterCount from '@tiptap/extension-character-count';
-import { TableKit } from '@tiptap/extension-table';
+import { TableKit, Table } from '@tiptap/extension-table';
 import TextAlign from '@tiptap/extension-text-align';
 import { TextStyle, Color, FontFamily, FontSize } from '@tiptap/extension-text-style';
 import Highlight from '@tiptap/extension-highlight';
@@ -21,6 +21,7 @@ import Subscript from '@tiptap/extension-subscript';
 import Superscript from '@tiptap/extension-superscript';
 import TiptapImage from '@tiptap/extension-image';
 import { PaginationPlus, PAGE_SIZES } from 'tiptap-pagination-plus';
+import { ImageNodeView } from '@/components/word-editor-image-node';
 import {
   AlignCenter,
   AlignJustify,
@@ -111,9 +112,17 @@ const PAGE_CONFIG = {
 };
 
 /**
- * Image dont la largeur voulue est écrite dans `style`, et non dans un attribut
- * `width` : c'est la forme que l'export serveur lit, et celle que le navigateur
- * applique réellement à l'affichage.
+ * Image dont la largeur et l'alignement voulus sont écrits dans `style`, et non
+ * dans des attributs `width`/`align` séparés : c'est la forme que l'export
+ * serveur lit, et celle que le navigateur applique réellement à l'affichage.
+ * Redimensionnement (poignée) et alignement se pilotent directement sur
+ * l'image via {@link ImageNodeView} — pas seulement par le menu contextuel
+ * {@link ImageMenu}.
+ * <p>
+ * `align` est calculé dans le {@code renderHTML} de `width` (pas le sien
+ * propre) : Tiptap ne fusionne pas deux `style` renvoyés par deux attributs
+ * différents du même nœud, la seconde valeur écraserait la première — un seul
+ * calcul lisant les deux attributs évite ce piège.
  */
 const DocumentImage = TiptapImage.extend({
   addAttributes() {
@@ -122,8 +131,53 @@ const DocumentImage = TiptapImage.extend({
       width: {
         default: null,
         parseHTML: (element) => element.style.width || element.getAttribute('width'),
-        renderHTML: (attributes) =>
-          attributes.width ? { style: `width: ${attributes.width}` } : {},
+        renderHTML: () => ({}),
+      },
+      align: {
+        default: 'center',
+        parseHTML: (element) => {
+          if (element.style.float === 'left') return 'left';
+          if (element.style.float === 'right') return 'right';
+          return 'center';
+        },
+        renderHTML: (attributes) => {
+          const parts: string[] = [];
+          if (attributes.width) parts.push(`width: ${attributes.width}`);
+          if (attributes.align === 'left') parts.push('float: left', 'margin: 0.25rem 1rem 0.75rem 0');
+          else if (attributes.align === 'right') parts.push('float: right', 'margin: 0.25rem 0 0.75rem 1rem');
+          else parts.push('display: block', 'margin: 0.5rem auto');
+          return { style: parts.join('; ') };
+        },
+      },
+    };
+  },
+  addNodeView() {
+    return ReactNodeViewRenderer(ImageNodeView);
+  },
+});
+
+/**
+ * Table dont l'alignement (position sur la page une fois rétrécie par
+ * redimensionnement de colonnes) se pilote depuis le menu contextuel {@link
+ * TableMenu} — la taille, elle, se règle déjà directement sur le tableau via
+ * les poignées de colonne natives de l'extension Table ({@code resizable}).
+ */
+const DocumentTable = Table.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      align: {
+        default: 'left',
+        parseHTML: (element) => {
+          if (element.style.float === 'right') return 'right';
+          if (element.style.marginLeft === 'auto' && element.style.marginRight === 'auto') return 'center';
+          return 'left';
+        },
+        renderHTML: (attributes) => {
+          if (attributes.align === 'right') return { style: 'float: right; margin: 0.5rem 0 0.75rem 1rem;' };
+          if (attributes.align === 'center') return { style: 'margin-left: auto; margin-right: auto;' };
+          return {};
+        },
       },
     };
   },
@@ -200,6 +254,8 @@ export interface WordEditorHandle {
   getHtml: () => string;
   /** Remplace un intervalle par du texte brut — utilisé pour appliquer une suggestion IA acceptée. */
   replaceRange: (from: number, to: number, text: string) => void;
+  /** Insère du HTML à la position courante du curseur (ou remplace la sélection active, le cas échéant) — composer IA. */
+  insertAtCursor: (html: string) => void;
 }
 
 interface WordEditorProps {
@@ -236,7 +292,8 @@ export const WordEditor = forwardRef<WordEditorHandle, WordEditorProps>(function
       Subscript,
       Superscript,
       TextAlign.configure({ types: ['heading', 'paragraph'] }),
-      TableKit.configure({ table: { resizable: true, allowTableNodeSelection: true } }),
+      TableKit.configure({ table: false }),
+      DocumentTable.configure({ resizable: true, allowTableNodeSelection: true }),
       DocumentImage.configure({ allowBase64: true, inline: false }),
       CharacterCount,
       Placeholder.configure({ placeholder: 'Rédigez votre document…' }),
@@ -259,6 +316,9 @@ export const WordEditor = forwardRef<WordEditorHandle, WordEditorProps>(function
       replaceRange: (from: number, to: number, text: string) => {
         editor?.chain().focus().insertContentAt({ from, to }, text).run();
       },
+      insertAtCursor: (html: string) => {
+        editor?.chain().focus().insertContent(html).run();
+      },
     }),
     [editor, initialHtml],
   );
@@ -279,18 +339,64 @@ export const WordEditor = forwardRef<WordEditorHandle, WordEditorProps>(function
     [onOutlineChange],
   );
 
+  /**
+   * `TableView` (vue interactive de l'extension Table, activée par
+   * `resizable: true`) ne gère que le colgroup/la largeur des colonnes — elle
+   * ignore silencieusement tout style dérivé d'un attribut de nœud générique
+   * comme notre `align` (contrairement à `editor.getHTML()`, qui lui reste
+   * correct : l'alignement est bien sauvegardé et exporté, seul l'aperçu live
+   * ne se mettait pas à jour). On applique donc l'alignement à la main sur le
+   * `<table>` DOM après chaque transaction, sans toucher à `width` — laissée
+   * à `TableView`, seule à savoir si la table a été rétrécie par un
+   * redimensionnement de colonne (l'alignement n'a de sens visible que dans
+   * ce cas, une table encore à 100% de la page n'a nulle part où se centrer).
+   */
+  const syncTableAlignment = useCallback((instance: Editor) => {
+    instance.state.doc.descendants((node, pos) => {
+      if (node.type.name !== 'table') return;
+      const dom = instance.view.nodeDOM(pos);
+      const wrapper = dom instanceof HTMLElement ? dom : null;
+      const table = wrapper?.tagName === 'TABLE' ? wrapper : wrapper?.querySelector('table');
+      if (!table) return;
+      const align = (node.attrs.align as string) || 'left';
+      table.style.float = align === 'right' ? 'right' : '';
+      table.style.marginLeft = align === 'center' ? 'auto' : '';
+      table.style.marginRight = align === 'center' ? 'auto' : align === 'right' ? '1rem' : '';
+    });
+  }, []);
+
   useEffect(() => {
     if (!editor) return;
     const handler = () => {
       onChange(editor.getHTML());
       publishOutline(editor);
+      syncTableAlignment(editor);
     };
     publishOutline(editor);
+    syncTableAlignment(editor);
     editor.on('update', handler);
     return () => {
       editor.off('update', handler);
     };
-  }, [editor, onChange, publishOutline]);
+  }, [editor, onChange, publishOutline, syncTableAlignment]);
+
+  /**
+   * PaginationPlus recalcule et redécoupe le contenu en pages en continu (pas
+   * seulement à la frappe — mesure de hauteur asynchrone), en reconstruisant
+   * le wrapper des tables à chaque passage : ça écrase l'alignement qu'on
+   * vient de poser sur le `<table>` DOM (cf. {@link syncTableAlignment}) à un
+   * rythme imprévisible, qu'un seul rappel sur `update`/mutation DOM ne suffit
+   * pas toujours à rattraper (vérifié empiriquement — une réapplication
+   * ponctuelle est parfois immédiatement défaite). Un intervalle discret est
+   * la façon la plus simple de rester vrai en continu sans dépendre du timing
+   * interne de cette bibliothèque : le coût est négligeable (quelques styles
+   * déjà corrects la plupart du temps, aucune opération DOM coûteuse).
+   */
+  useEffect(() => {
+    if (!editor) return;
+    const id = window.setInterval(() => syncTableAlignment(editor), 300);
+    return () => window.clearInterval(id);
+  }, [editor, syncTableAlignment]);
 
   useEffect(() => {
     editor?.setEditable(editable);
@@ -617,6 +723,19 @@ function TableMenu({ editor }: { editor: Editor }) {
           <DropdownMenuItem onClick={() => editor.chain().focus().toggleHeaderColumn().run()}>
             <Columns3 className="mr-2 h-4 w-4" /> Colonne d&apos;en-tête
           </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onClick={() => editor.chain().focus().updateAttributes('table', { align: 'left' }).run()}>
+            <AlignLeft className="mr-2 h-4 w-4" /> Aligner le tableau à gauche
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => editor.chain().focus().updateAttributes('table', { align: 'center' }).run()}>
+            <AlignCenter className="mr-2 h-4 w-4" /> Centrer le tableau
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => editor.chain().focus().updateAttributes('table', { align: 'right' }).run()}>
+            <AlignRight className="mr-2 h-4 w-4" /> Aligner le tableau à droite
+          </DropdownMenuItem>
+          <p className="px-2 pb-1 pt-1.5 text-[11px] text-muted-foreground">
+            Redimensionnez une colonne en faisant glisser sa bordure.
+          </p>
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={() => editor.chain().focus().deleteTable().run()} className="text-destructive">
             <Trash2 className="mr-2 h-4 w-4" /> Supprimer le tableau

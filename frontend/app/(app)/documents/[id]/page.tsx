@@ -26,6 +26,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { DocumentStatusBadge } from '@/components/status-badge';
 import { SectionSuggestionDiff } from '@/components/section-suggestion-diff';
+import { ReferenceDocumentsDialog } from '@/components/reference-documents-dialog';
 import { ConfidencePill } from '@/components/confidence-legend';
 import {
   WordEditor,
@@ -325,18 +326,25 @@ export default function DocumentEditPage() {
         </Card>
 
         <div className="flex min-h-0 flex-col gap-3">
-          <Card className="min-h-0 flex-1 overflow-hidden">
-            <WordEditor
-              ref={editorRef}
-              key={doc.id}
-              initialHtml={initialHtmlRef.current ?? '<p></p>'}
-              onChange={handleChange}
-              onOutlineChange={setOutline}
-              onError={(message) => toast.error('Insertion impossible', { description: message })}
-              onImproveSelection={(selection) => improveMutation.mutate(selection)}
-              improving={improveMutation.isPending}
-            />
-          </Card>
+          <div className="relative min-h-0 flex-1">
+            <Card className="h-full overflow-hidden">
+              <WordEditor
+                ref={editorRef}
+                key={doc.id}
+                initialHtml={initialHtmlRef.current ?? '<p></p>'}
+                onChange={handleChange}
+                onOutlineChange={setOutline}
+                onError={(message) => toast.error('Insertion impossible', { description: message })}
+                onImproveSelection={(selection) => improveMutation.mutate(selection)}
+                improving={improveMutation.isPending}
+              />
+            </Card>
+
+            {/* Flottant par-dessus l'éditeur (jamais dans le flux) : la navigation du document reste toujours possible partout ailleurs. */}
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center px-4">
+              <ReferenceDocumentsDialog documentId={params.id} editorRef={editorRef} />
+            </div>
+          </div>
 
           {suggestion && (
             <div className="shrink-0 space-y-1">

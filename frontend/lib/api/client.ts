@@ -637,14 +637,22 @@ export async function sendMessage(conversationId: string, content: string): Prom
 
 interface BackendReferenceDocumentDTO {
   id: string;
-  conversationId: string;
+  conversationId?: string;
+  documentId?: string;
   fileName: string;
   storagePath: string;
   importedAt: string;
 }
 
 function adaptReferenceDocumentDTO(dto: BackendReferenceDocumentDTO): ReferenceDocument {
-  return { id: dto.id, conversationId: dto.conversationId, fileName: dto.fileName, storagePath: dto.storagePath, importedAt: dto.importedAt };
+  return {
+    id: dto.id,
+    conversationId: dto.conversationId,
+    documentId: dto.documentId,
+    fileName: dto.fileName,
+    storagePath: dto.storagePath,
+    importedAt: dto.importedAt,
+  };
 }
 
 export async function addReferenceDocument(conversationId: string, file: File): Promise<ApiSuccess<ReferenceDocument>> {
@@ -665,6 +673,41 @@ export async function listReferenceDocuments(conversationId: string): Promise<Ap
     return ok(res.data.data.map(adaptReferenceDocumentDTO));
   } catch (e) {
     throw toApiError(e, `/api/v1/conversations/${conversationId}/reference-documents`);
+  }
+}
+
+/**
+ * Documents de référence attachés directement à un Document en cours
+ * d'édition (pendant de add/listReferenceDocuments ci-dessus, mais sur
+ * /documents/{id} plutôt que /conversations/{id}) — leur contenu enrichit
+ * automatiquement les prompts des boutons "Améliorer avec l'IA" de l'éditeur.
+ */
+export async function addDocumentReference(documentId: string, file: File): Promise<ApiSuccess<ReferenceDocument>> {
+  try {
+    const form = new FormData();
+    form.append('file', file);
+    const res = await http.post<{ data: BackendReferenceDocumentDTO }>(`/documents/${documentId}/reference-documents`, form);
+    return ok(adaptReferenceDocumentDTO(res.data.data));
+  } catch (e) {
+    throw toApiError(e, `/api/v1/documents/${documentId}/reference-documents`);
+  }
+}
+
+export async function listDocumentReferences(documentId: string): Promise<ApiSuccess<ReferenceDocument[]>> {
+  try {
+    const res = await http.get<{ data: BackendReferenceDocumentDTO[] }>(`/documents/${documentId}/reference-documents`);
+    return ok(res.data.data.map(adaptReferenceDocumentDTO));
+  } catch (e) {
+    throw toApiError(e, `/api/v1/documents/${documentId}/reference-documents`);
+  }
+}
+
+export async function deleteDocumentReference(documentId: string, referenceId: string): Promise<ApiSuccess<{ id: string }>> {
+  try {
+    const res = await http.delete<{ data: { id: string } }>(`/documents/${documentId}/reference-documents/${referenceId}`);
+    return ok(res.data.data);
+  } catch (e) {
+    throw toApiError(e, `/api/v1/documents/${documentId}/reference-documents/${referenceId}`);
   }
 }
 
@@ -780,7 +823,8 @@ export async function importDocument(file: File): Promise<ApiSuccess<AppDocument
 export async function generateDocument(input: {
   documentTypeId: string;
   name: string;
-  description: string;
+  /** Optionnelle — vide ou absente, le backend crée un squelette vierge sans appeler l'IA. */
+  description?: string;
 }): Promise<ApiSuccess<AppDocument>> {
   try {
     const res = await http.post<{ data: BackendDocumentDTO }>('/documents/generate', input);
@@ -849,6 +893,23 @@ export async function improveDocumentSelection(
     return ok(res.data.data);
   } catch (e) {
     throw toApiError(e, `/api/v1/documents/${documentId}/improve-selection`);
+  }
+}
+
+/**
+ * Composer IA de l'éditeur (panneau « Documents de référence ») : génère du
+ * contenu à partir d'une instruction libre, enrichi par les documents de
+ * référence attachés, prêt à insérer au curseur (HTML déjà formaté côté serveur).
+ */
+export async function generateAtCursor(documentId: string, instruction: string): Promise<ApiSuccess<{ contentHtml: string }>> {
+  try {
+    const res = await http.post<{ data: { contentHtml: string } }>(
+      `/documents/${documentId}/generate-at-cursor`,
+      { instruction },
+    );
+    return ok(res.data.data);
+  } catch (e) {
+    throw toApiError(e, `/api/v1/documents/${documentId}/generate-at-cursor`);
   }
 }
 

@@ -48,6 +48,7 @@ class DocumentSectionServiceTest {
     @Mock private DocumentSectionHistoryRepository documentSectionHistoryRepository;
     @Mock private DocumentSectionMapper documentSectionMapper;
     @Mock private GenerationOrchestrator generationOrchestrator;
+    @Mock private DocumentReferenceContextService documentReferenceContextService;
 
     private DocumentSectionService service;
 
@@ -59,7 +60,7 @@ class DocumentSectionServiceTest {
     void setUp() {
         service = new DocumentSectionService(documentSectionRepository, documentSectionHistoryRepository,
                 documentSectionMapper, generationOrchestrator, new PromptBuilder(),
-                new SectionImprovementResponseParser());
+                new SectionImprovementResponseParser(), documentReferenceContextService);
     }
 
     private DocumentSection sectionOwnedBy(Utilisateur owner) {
@@ -112,6 +113,7 @@ class DocumentSectionServiceTest {
         DocumentSection section = sectionOwnedBy(user);
         section.setUserContent("Texte original.");
         when(documentSectionRepository.findById(sectionId)).thenReturn(Optional.of(section));
+        when(documentReferenceContextService.enrich(any(), any())).thenAnswer(inv -> inv.getArgument(1));
         when(generationOrchestrator.generate(any())).thenReturn(GenerationResult.builder().content("Texte amélioré.").build());
 
         SectionSuggestionDTO result = service.improve(documentId, sectionId, user.getId(), false);
@@ -129,6 +131,7 @@ class DocumentSectionServiceTest {
         DocumentSection section = sectionOwnedBy(user);
         section.setUserContent("Texte original.");
         when(documentSectionRepository.findById(sectionId)).thenReturn(Optional.of(section));
+        when(documentReferenceContextService.enrich(any(), any())).thenAnswer(inv -> inv.getArgument(1));
         when(generationOrchestrator.generate(any())).thenReturn(GenerationResult.builder()
                 .content("{\"content\": \"Texte amélioré.\", \"confidence\": 82}").build());
 

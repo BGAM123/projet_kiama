@@ -7,11 +7,13 @@ import java.time.LocalDateTime;
 import java.util.UUID;
 
 /**
- * Document de référence importé dans une {@link Conversation} — sa version
- * indexée pour le RAG vit dans {@code document_chunk}
- * ({@link DocumentChunk#getIdReference()}, UUID brut plutôt qu'une relation
- * JPA : DocumentChunk vit dans le module docuai-ai-orchestration/RAG, qui ne
- * dépend pas de cette entité "conversation").
+ * Document de référence importé dans une {@link Conversation} OU attaché
+ * directement à un {@link Document} en cours d'édition (V15__document_reference_documents.sql,
+ * exactement l'un des deux, jamais les deux ni aucun — {@code
+ * chk_document_reference_owner}) — sa version indexée pour le RAG vit dans
+ * {@code document_chunk} ({@link DocumentChunk#getIdReference()}, UUID brut
+ * plutôt qu'une relation JPA : DocumentChunk vit dans le module
+ * docuai-ai-orchestration/RAG, qui ne dépend pas de ces entités "core").
  */
 @Entity
 @Table(name = "document_reference")
@@ -31,6 +33,10 @@ public class DocumentReference {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "id_conversation")
     private Conversation conversation;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "id_document")
+    private Document document;
 
     @Column(name = "nom_fichier", nullable = false, length = 255)
     private String nomFichier;
