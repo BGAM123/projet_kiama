@@ -12,6 +12,7 @@ import com.docuai.api.dto.CreateDocumentRequest;
 import com.docuai.api.dto.DocumentDTO;
 import com.docuai.api.dto.GenerateDocumentRequest;
 import com.docuai.api.dto.SectionSuggestionDTO;
+import com.docuai.api.event.DocumentGenerationCompletedEvent;
 import com.docuai.api.exception.NotFoundException;
 import com.docuai.api.mapper.DocumentMapper;
 import com.docuai.api.mapper.DocumentSectionMapper;
@@ -41,6 +42,7 @@ import com.docuai.extraction.storage.ObjectStorageService;
 import com.docuai.api.util.FileNames;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -91,6 +93,7 @@ public class DocumentService {
     private final ObjectStorageService objectStorageService;
     private final MinioProperties minioProperties;
     private final DocumentReferenceContextService documentReferenceContextService;
+    private final ApplicationEventPublisher eventPublisher;
 
     public DocumentService(DocumentRepository documentRepository,
                             DocumentReferenceRepository documentReferenceRepository,
@@ -110,7 +113,8 @@ public class DocumentService {
                             ExportService exportService,
                             ObjectStorageService objectStorageService,
                             MinioProperties minioProperties,
-                            DocumentReferenceContextService documentReferenceContextService) {
+                            DocumentReferenceContextService documentReferenceContextService,
+                            ApplicationEventPublisher eventPublisher) {
         this.documentRepository = documentRepository;
         this.documentReferenceRepository = documentReferenceRepository;
         this.documentSectionRepository = documentSectionRepository;
@@ -130,6 +134,7 @@ public class DocumentService {
         this.objectStorageService = objectStorageService;
         this.minioProperties = minioProperties;
         this.documentReferenceContextService = documentReferenceContextService;
+        this.eventPublisher = eventPublisher;
     }
 
     @Transactional
@@ -179,7 +184,12 @@ public class DocumentService {
      */
     @Transactional
     public DocumentDTO importDocument(MultipartFile file, Utilisateur currentUser) {
-        StoredFile stored = fileIngestionService.ingest(file);
+        boolean isDocx = "docx".equals(FileNames.extensionOf(FileNames.sanitize(file.getOriginalFilename())));
+        // Pour un .docx, le texte brut Tika ne sert jamais (DocxHtmlImporter
+        // reparse le fichier lui-même pour produire le HTML mis en forme) —
+        // l'ingestion saute cette extraction pour ne pas parser deux fois le
+        // même document.
+        StoredFile stored = fileIngestionService.ingest(file, !isDocx);
         String extension = FileNames.extensionOf(stored.fileName());
         String contentHtml = "docx".equals(extension)
                 ? docxHtmlImporter.toHtml(stored.content())
@@ -233,15 +243,17 @@ public class DocumentService {
                 .build();
 
         boolean hasDescription = request.getDescription() != null && !request.getDescription().isBlank();
-        Map<String, GeneratedSectionContent> generated = hasDescription
+        GenerationOutcome outcome = hasDescription
                 ? generateSectionContents(documentType.getNom(), request.getDescription(), tree,
                         document.getLangue().name(), document.getTon().name())
-                : Map.of();
+                : new GenerationOutcome(Map.of(), false);
+        Map<String, GeneratedSectionContent> generated = outcome.sections();
 
         // Contenu réellement produit par l'IA -> SAUVEGARDE ; sans description
         // ou génération épuisée -> BROUILLON, comme un squelette vide créé
         // sans IA (cf. #create).
-        document.setStatut(generated.isEmpty() ? DocumentStatut.BROUILLON : DocumentStatut.SAUVEGARDE);
+        boolean generationSucceeded = !generated.isEmpty();
+        document.setStatut(generationSucceeded ? DocumentStatut.SAUVEGARDE : DocumentStatut.BROUILLON);
         document.setContentHtml(documentContentHtmlBuilder.build(tree, generated));
         document = documentRepository.save(document);
 
@@ -250,8 +262,16 @@ public class DocumentService {
         documentSectionRepository.saveAll(sections);
         enforceHistoryLimit(currentUser.getId());
 
+        // Aucun appel IA tenté sans description : rien à notifier dans ce cas.
+        if (hasDescription) {
+            eventPublisher.publishEvent(new DocumentGenerationCompletedEvent(
+                    document.getId(), currentUser.getId(), document.getTitre(), generationSucceeded, outcome.quotaExceeded()));
+        }
+
         return toDto(document, sections);
     }
+
+    private record GenerationOutcome(Map<String, GeneratedSectionContent> sections, boolean quotaExceeded) {}
 
     /**
      * Purge l'historique d'un utilisateur au-delà de {@link #MAX_HISTORY_DOCUMENTS}
@@ -268,14 +288,19 @@ public class DocumentService {
         if (documents.size() <= MAX_HISTORY_DOCUMENTS) {
             return;
         }
-        for (Document toDelete : documents.subList(MAX_HISTORY_DOCUMENTS, documents.size())) {
-            deleteDocumentAndStorage(toDelete);
+        List<Document> toPurge = documents.subList(MAX_HISTORY_DOCUMENTS, documents.size());
+        List<UUID> toPurgeIds = toPurge.stream().map(Document::getId).toList();
+        Map<UUID, List<DocumentReference>> referencesByDocumentId = documentReferenceRepository
+                .findByDocument_IdIn(toPurgeIds).stream()
+                .collect(Collectors.groupingBy(r -> r.getDocument().getId()));
+        for (Document toDelete : toPurge) {
+            deleteDocumentAndStorage(toDelete, referencesByDocumentId.getOrDefault(toDelete.getId(), List.of()));
         }
     }
 
     /** Supprime les fichiers MinIO liés (export + documents de référence) avant la ligne document elle-même (cascade DB pour sections/références/chunks). */
-    private void deleteDocumentAndStorage(Document document) {
-        for (DocumentReference reference : documentReferenceRepository.findByDocument_IdOrderByDateImportAsc(document.getId())) {
+    private void deleteDocumentAndStorage(Document document, List<DocumentReference> references) {
+        for (DocumentReference reference : references) {
             try {
                 objectStorageService.delete(minioProperties.getBucketReferences(), reference.getCheminStockage());
             } catch (Exception e) {
@@ -304,9 +329,10 @@ public class DocumentService {
      * correspondance vide (squelette non rempli) plutôt que de faire échouer
      * toute la requête pour un problème de format côté modèle.
      */
-    private Map<String, GeneratedSectionContent> generateSectionContents(
+    private GenerationOutcome generateSectionContents(
             String documentTypeName, String description, List<StructureNode> tree, String language, String tone) {
         String systemPrompt = promptBuilder.buildDocumentContentSystemPrompt(documentTypeName, description, tree, language, tone);
+        boolean quotaExceeded = false;
 
         for (int attempt = 1; attempt <= CONTENT_GENERATION_MAX_ATTEMPTS; attempt++) {
             try {
@@ -316,19 +342,23 @@ public class DocumentService {
                         .build();
                 String raw = generationOrchestrator.generate(request).getContent();
                 List<GeneratedSectionContent> sections = documentContentResponseParser.parse(raw);
-                return sections.stream()
+                Map<String, GeneratedSectionContent> byId = sections.stream()
                         .filter(section -> section.getId() != null)
                         // Un id dupliqué dans la réponse ne doit pas faire
                         // échouer la collecte : la première occurrence gagne.
                         .collect(Collectors.toMap(GeneratedSectionContent::getId, Function.identity(), (a, b) -> a));
+                return new GenerationOutcome(byId, false);
             } catch (DocumentContentResponseParser.DocumentContentParseException | AiProviderException e) {
+                if (e instanceof AiProviderException aiException && aiException.isQuotaExceeded()) {
+                    quotaExceeded = true;
+                }
                 log.warn("Échec de génération de contenu IA (tentative {}/{}) : {}",
                         attempt, CONTENT_GENERATION_MAX_ATTEMPTS, e.getMessage());
             }
         }
         log.warn("Génération de contenu IA épuisée après {} tentatives — document créé avec un squelette vide.",
                 CONTENT_GENERATION_MAX_ATTEMPTS);
-        return Map.of();
+        return new GenerationOutcome(Map.of(), quotaExceeded);
     }
 
     /** Un bloc vide entre deux lignes vides = un nouveau paragraphe — même découpage que {@code StructureExtractionService.extractPlainText}, mais en HTML plutôt qu'en nœuds de structure. */
@@ -458,8 +488,13 @@ public class DocumentService {
         if (!isAdmin && !userId.equals(requestingUserId)) {
             throw new AccessDeniedException("Vous ne pouvez consulter que votre propre historique.");
         }
-        return documentRepository.findByUtilisateur_IdOrderByDateCreationDesc(userId).stream()
-                .map(d -> toDto(d, documentSectionRepository.findByDocument_IdOrderByOrderIndexAsc(d.getId())))
+        List<Document> documents = documentRepository.findByUtilisateur_IdOrderByDateCreationDesc(userId);
+        List<UUID> documentIds = documents.stream().map(Document::getId).toList();
+        Map<UUID, List<DocumentSection>> sectionsByDocumentId = documentSectionRepository
+                .findByDocument_IdInOrderByOrderIndexAsc(documentIds).stream()
+                .collect(Collectors.groupingBy(s -> s.getDocument().getId()));
+        return documents.stream()
+                .map(d -> toDto(d, sectionsByDocumentId.getOrDefault(d.getId(), List.of())))
                 .toList();
     }
 

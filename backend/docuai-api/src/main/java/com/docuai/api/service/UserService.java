@@ -135,10 +135,13 @@ public class UserService {
 
     private Set<Role> resolveRoles(List<UUID> roleIds) {
         if (roleIds == null) return new HashSet<>();
-        return roleIds.stream()
-                .map(id -> roleRepository.findById(id)
-                        .orElseThrow(() -> new NotFoundException("ROLE_NOT_FOUND", "Rôle introuvable : " + id)))
-                .collect(Collectors.toSet());
+        List<Role> found = roleRepository.findAllById(roleIds);
+        if (found.size() != new HashSet<>(roleIds).size()) {
+            Set<UUID> foundIds = found.stream().map(Role::getId).collect(Collectors.toSet());
+            UUID missing = roleIds.stream().filter(id -> !foundIds.contains(id)).findFirst().orElseThrow();
+            throw new NotFoundException("ROLE_NOT_FOUND", "Rôle introuvable : " + missing);
+        }
+        return new HashSet<>(found);
     }
 
     private Utilisateur findEntity(UUID id) {

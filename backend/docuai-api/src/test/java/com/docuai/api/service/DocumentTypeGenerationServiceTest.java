@@ -8,6 +8,7 @@ import com.docuai.ai.service.SkeletonContentGuard;
 import com.docuai.ai.service.SkeletonResponseParser;
 import com.docuai.api.dto.DocumentTypeDTO;
 import com.docuai.api.dto.GenerateDocumentTypeRequest;
+import com.docuai.api.event.DocumentTypeGenerationCompletedEvent;
 import com.docuai.api.mapper.DocumentTypeMapper;
 import com.docuai.core.model.Categorie;
 import com.docuai.core.model.DocumentStructure;
@@ -23,6 +24,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.util.Optional;
 import java.util.UUID;
@@ -51,6 +53,7 @@ class DocumentTypeGenerationServiceTest {
     @Mock private DocumentTypeMapper documentTypeMapper;
     @Mock private GenerationOrchestrator generationOrchestrator;
     @Mock private DocumentTypeContextCacheService documentTypeContextCacheService;
+    @Mock private ApplicationEventPublisher eventPublisher;
 
     private DocumentTypeGenerationService service;
 
@@ -76,7 +79,7 @@ class DocumentTypeGenerationServiceTest {
         service = new DocumentTypeGenerationService(
                 documentTypeRepository, documentStructureRepository, categorieRepository,
                 documentTypeMapper, generationOrchestrator, new PromptBuilder(),
-                new SkeletonResponseParser(), new SkeletonContentGuard(), documentTypeContextCacheService);
+                new SkeletonResponseParser(), new SkeletonContentGuard(), documentTypeContextCacheService, eventPublisher);
 
         when(categorieRepository.findById(categoryId)).thenReturn(Optional.of(categorie));
         when(documentTypeRepository.save(any(DocumentType.class))).thenAnswer(inv -> {
@@ -115,6 +118,11 @@ class DocumentTypeGenerationServiceTest {
         assertThat(typeCaptor.getValue().getStatut()).isEqualTo(DocumentTypeStatut.STRUCTURE_EXTRAITE);
 
         verify(documentTypeContextCacheService).evict(any());
+
+        ArgumentCaptor<DocumentTypeGenerationCompletedEvent> eventCaptor = ArgumentCaptor.forClass(DocumentTypeGenerationCompletedEvent.class);
+        verify(eventPublisher).publishEvent(eventCaptor.capture());
+        assertThat(eventCaptor.getValue().success()).isTrue();
+        assertThat(eventCaptor.getValue().quotaExceeded()).isFalse();
     }
 
     @Test
@@ -147,6 +155,11 @@ class DocumentTypeGenerationServiceTest {
         ArgumentCaptor<DocumentType> typeCaptor = ArgumentCaptor.forClass(DocumentType.class);
         verify(documentTypeRepository, times(2)).save(typeCaptor.capture());
         assertThat(typeCaptor.getValue().getStatut()).isEqualTo(DocumentTypeStatut.ECHEC_EXTRACTION);
+
+        ArgumentCaptor<DocumentTypeGenerationCompletedEvent> eventCaptor = ArgumentCaptor.forClass(DocumentTypeGenerationCompletedEvent.class);
+        verify(eventPublisher).publishEvent(eventCaptor.capture());
+        assertThat(eventCaptor.getValue().success()).isFalse();
+        assertThat(eventCaptor.getValue().quotaExceeded()).isFalse();
     }
 
     @Test
@@ -160,5 +173,25 @@ class DocumentTypeGenerationServiceTest {
         ArgumentCaptor<DocumentType> typeCaptor = ArgumentCaptor.forClass(DocumentType.class);
         verify(documentTypeRepository, times(2)).save(typeCaptor.capture());
         assertThat(typeCaptor.getValue().getStatut()).isEqualTo(DocumentTypeStatut.ECHEC_EXTRACTION);
+
+        ArgumentCaptor<DocumentTypeGenerationCompletedEvent> eventCaptor = ArgumentCaptor.forClass(DocumentTypeGenerationCompletedEvent.class);
+        verify(eventPublisher).publishEvent(eventCaptor.capture());
+        assertThat(eventCaptor.getValue().success()).isFalse();
+        assertThat(eventCaptor.getValue().quotaExceeded()).isFalse();
+    }
+
+    @Test
+    void generate_flagsQuotaExceeded_whenAiProviderReturns429() {
+        org.springframework.web.reactive.function.client.WebClientResponseException tooManyRequests =
+                org.springframework.web.reactive.function.client.WebClientResponseException.create(
+                        429, "Too Many Requests", org.springframework.http.HttpHeaders.EMPTY, new byte[0], null);
+        when(generationOrchestrator.generate(any())).thenThrow(new AiProviderException("Quota dépassé.", tooManyRequests));
+
+        service.generate(request(), Utilisateur.builder().build());
+
+        ArgumentCaptor<DocumentTypeGenerationCompletedEvent> eventCaptor = ArgumentCaptor.forClass(DocumentTypeGenerationCompletedEvent.class);
+        verify(eventPublisher).publishEvent(eventCaptor.capture());
+        assertThat(eventCaptor.getValue().success()).isFalse();
+        assertThat(eventCaptor.getValue().quotaExceeded()).isTrue();
     }
 }

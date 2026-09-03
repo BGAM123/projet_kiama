@@ -5,8 +5,10 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  * Vérifie a posteriori que le contenu Markdown généré par le fournisseur IA
@@ -34,8 +36,9 @@ public class StructuralValidator {
         while (matcher.find()) {
             foundHeadings.add(matcher.group(2).strip());
         }
+        Set<String> foundHeadingsLower = foundHeadings.stream().map(String::toLowerCase).collect(Collectors.toSet());
         List<String> missing = expectedHeadings.stream()
-                .filter(expected -> foundHeadings.stream().noneMatch(found -> found.equalsIgnoreCase(expected)))
+                .filter(expected -> !foundHeadingsLower.contains(expected.toLowerCase()))
                 .toList();
         return new ValidationResult(missing.isEmpty(), missing);
     }

@@ -5,6 +5,7 @@ import com.docuai.ai.dto.GenerationResult;
 import com.docuai.api.dto.CreateDocumentRequest;
 import com.docuai.api.dto.DocumentDTO;
 import com.docuai.api.dto.GenerateDocumentRequest;
+import com.docuai.api.event.DocumentGenerationCompletedEvent;
 import com.docuai.api.mapper.DocumentMapper;
 import com.docuai.api.mapper.DocumentSectionMapper;
 import com.docuai.core.model.Document;
@@ -31,6 +32,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.security.access.AccessDeniedException;
 
@@ -75,6 +77,7 @@ class DocumentServiceTest {
     @Mock private ObjectStorageService objectStorageService;
     @Mock private MinioProperties minioProperties;
     @Mock private DocumentReferenceContextService documentReferenceContextService;
+    @Mock private ApplicationEventPublisher eventPublisher;
 
     private DocumentService service;
 
@@ -91,7 +94,7 @@ class DocumentServiceTest {
                 new DocumentSkeletonHtmlBuilder(new DocumentContentHtmlBuilder()), new DocumentContentHtmlBuilder(),
                 generationOrchestrator, promptBuilder, sectionImprovementResponseParser, documentContentResponseParser,
                 fileIngestionService, docxHtmlImporter, exportService, objectStorageService, minioProperties,
-                documentReferenceContextService);
+                documentReferenceContextService, eventPublisher);
     }
 
     private DocumentType documentType() {
@@ -169,7 +172,7 @@ class DocumentServiceTest {
 
         DocumentReference oldestReference = DocumentReference.builder()
                 .id(UUID.randomUUID()).document(oldest).cheminStockage("references/old-ref.pdf").build();
-        when(documentReferenceRepository.findByDocument_IdOrderByDateImportAsc(oldest.getId())).thenReturn(List.of(oldestReference));
+        when(documentReferenceRepository.findByDocument_IdIn(List.of(oldest.getId()))).thenReturn(List.of(oldestReference));
 
         CreateDocumentRequest request = new CreateDocumentRequest();
         request.setDocumentTypeId(documentTypeId);
@@ -278,6 +281,12 @@ class DocumentServiceTest {
         assertThat(saved.getStatut()).isEqualTo(DocumentStatut.SAUVEGARDE);
         assertThat(saved.getContentHtml()).contains("Contexte rédigé par l'IA.").contains("<td><p>420k</p></td>");
         assertThat(dto.getTitle()).isEqualTo("Audit sécurité 2026");
+
+        ArgumentCaptor<DocumentGenerationCompletedEvent> eventCaptor = ArgumentCaptor.forClass(DocumentGenerationCompletedEvent.class);
+        verify(eventPublisher).publishEvent(eventCaptor.capture());
+        assertThat(eventCaptor.getValue().success()).isTrue();
+        assertThat(eventCaptor.getValue().quotaExceeded()).isFalse();
+        assertThat(eventCaptor.getValue().userId()).isEqualTo(user.getId());
     }
 
     /**
@@ -345,6 +354,47 @@ class DocumentServiceTest {
         verify(documentRepository).save(captor.capture());
         assertThat(captor.getValue().getContentHtml()).contains("<h2>Contexte</h2><p></p>");
         assertThat(dto).isNotNull();
+
+        ArgumentCaptor<DocumentGenerationCompletedEvent> eventCaptor = ArgumentCaptor.forClass(DocumentGenerationCompletedEvent.class);
+        verify(eventPublisher).publishEvent(eventCaptor.capture());
+        assertThat(eventCaptor.getValue().success()).isFalse();
+        assertThat(eventCaptor.getValue().quotaExceeded()).isFalse();
+    }
+
+    /**
+     * Un 429 (quota/rate limit IA dépassé) doit être signalé distinctement
+     * d'une panne générique du fournisseur — {@link GenerationNotificationListener}
+     * en tire un message différent (configurer un autre fournisseur plutôt que
+     * "réessayer plus tard").
+     */
+    @Test
+    void generateContent_flagsQuotaExceeded_whenAiProviderReturns429() {
+        when(documentTypeRepository.findById(documentTypeId)).thenReturn(Optional.of(documentType()));
+        when(documentStructureRepository.findByDocumentType_Id(documentTypeId))
+                .thenReturn(Optional.of(DocumentStructure.builder().arbreJson(sampleTree()).build()));
+        org.springframework.web.reactive.function.client.WebClientResponseException tooManyRequests =
+                org.springframework.web.reactive.function.client.WebClientResponseException.create(
+                        429, "Too Many Requests", org.springframework.http.HttpHeaders.EMPTY, new byte[0], null);
+        when(generationOrchestrator.generate(any()))
+                .thenThrow(new com.docuai.ai.exception.AiProviderException("Quota dépassé.", tooManyRequests));
+        when(documentRepository.save(any(Document.class))).thenAnswer(inv -> {
+            Document d = inv.getArgument(0);
+            if (d.getId() == null) d.setId(UUID.randomUUID());
+            return d;
+        });
+        when(documentSectionRepository.saveAll(anyList())).thenAnswer(inv -> inv.getArgument(0));
+        when(documentMapper.toDto(any(Document.class))).thenReturn(new DocumentDTO());
+
+        GenerateDocumentRequest request = new GenerateDocumentRequest();
+        request.setDocumentTypeId(documentTypeId);
+        request.setName("Audit");
+        request.setDescription("Un audit.");
+        service.generateContent(request, user);
+
+        ArgumentCaptor<DocumentGenerationCompletedEvent> eventCaptor = ArgumentCaptor.forClass(DocumentGenerationCompletedEvent.class);
+        verify(eventPublisher).publishEvent(eventCaptor.capture());
+        assertThat(eventCaptor.getValue().success()).isFalse();
+        assertThat(eventCaptor.getValue().quotaExceeded()).isTrue();
     }
 
     /**
@@ -358,8 +408,8 @@ class DocumentServiceTest {
         MockMultipartFile file = new MockMultipartFile("file", "Rapport annuel 2024.docx",
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "peu importe".getBytes());
         StoredFile stored = new StoredFile("Rapport_annuel_2024.docx", "sources/x/Rapport_annuel_2024.docx",
-                file.getContentType(), "texte brut ignoré pour un docx", "peu importe".getBytes());
-        when(fileIngestionService.ingest(file)).thenReturn(stored);
+                file.getContentType(), "", "peu importe".getBytes());
+        when(fileIngestionService.ingest(file, false)).thenReturn(stored);
         when(docxHtmlImporter.toHtml(stored.content())).thenReturn("<h1>Titre</h1><p>Corps <strong>en gras</strong>.</p>");
         when(documentRepository.save(any(Document.class))).thenAnswer(inv -> {
             Document d = inv.getArgument(0);
@@ -388,7 +438,7 @@ class DocumentServiceTest {
         MockMultipartFile file = new MockMultipartFile("file", "notes.txt", "text/plain", "peu importe".getBytes());
         StoredFile stored = new StoredFile("notes.txt", "sources/x/notes.txt", "text/plain",
                 "Premier paragraphe.\n\nSecond paragraphe.", "peu importe".getBytes());
-        when(fileIngestionService.ingest(file)).thenReturn(stored);
+        when(fileIngestionService.ingest(file, true)).thenReturn(stored);
         when(documentRepository.save(any(Document.class))).thenAnswer(inv -> {
             Document d = inv.getArgument(0);
             if (d.getId() == null) d.setId(UUID.randomUUID());

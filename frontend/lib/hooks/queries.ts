@@ -12,7 +12,6 @@ import {
   listUsers,
   listRoles,
   listAiConfigs,
-  listAuditLogs,
   listNotifications,
   listMessages,
   listReferenceDocuments,
@@ -22,7 +21,6 @@ import { useAuth } from '@/lib/auth-store';
 import type {
   AiModelConfig,
   AppDocument,
-  AuditLogEntry,
   Category,
   Conversation,
   DashboardStats,
@@ -113,19 +111,17 @@ export function useAiConfigs() {
   });
 }
 
-export function useAuditLogs() {
-  return useQuery<AuditLogEntry[]>({
-    queryKey: ['audit-logs'],
-    queryFn: async () => (await listAuditLogs()).data as AuditLogEntry[],
-  });
-}
-
 export function useNotifications() {
   const session = useAuth((s) => s.session);
   return useQuery<Notification[]>({
     queryKey: ['notifications', session?.user.id],
     queryFn: async () => (await listNotifications(session!.user.id)).data as Notification[],
     enabled: !!session,
+    // La génération IA (document/Document Type) écrit sa notification de fin
+    // de façon asynchrone, après coup — un polling court est le plus simple
+    // pour la faire apparaître (cloche + page /notifications, même requête
+    // partagée) sans action de l'utilisateur, en l'absence de push serveur.
+    refetchInterval: 30_000,
   });
 }
 

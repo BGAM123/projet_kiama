@@ -1,17 +1,18 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import Link from 'next/link';
 import { Bell, Check, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import {
-  listNotifications,
-  markNotificationRead,
-} from '@/lib/api/client';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { markNotificationRead } from '@/lib/api/client';
+import { useNotifications } from '@/lib/hooks/queries';
 import { useAuth } from '@/lib/auth-store';
 import { relativeTime } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { Notification } from '@/types';
+
+const EMPTY_NOTIFICATIONS: Notification[] = [];
 
 export function NotificationsBell() {
   const session = useAuth((s) => s.session);
@@ -19,14 +20,10 @@ export function NotificationsBell() {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
-  const { data } = useQuery({
-    queryKey: ['notifications', session?.user.id],
-    queryFn: async () => (await listNotifications(session!.user.id)).data as Notification[],
-    enabled: !!session,
-  });
-  const notifications: Notification[] = data ?? [];
+  const { data } = useNotifications();
+  const notifications: Notification[] = data ?? EMPTY_NOTIFICATIONS;
 
-  const unread = notifications.filter((n) => !n.read).length;
+  const unread = useMemo(() => notifications.filter((n) => !n.read).length, [notifications]);
 
   const mark = useMutation({
     mutationFn: async ({ id, read }: { id: string; read: boolean }) =>
@@ -91,6 +88,13 @@ export function NotificationsBell() {
               ))
             )}
           </div>
+          <Link
+            href="/notifications"
+            onClick={() => setOpen(false)}
+            className="block rounded-md px-3 py-2 text-center text-xs font-medium text-primary hover:bg-muted/60"
+          >
+            Voir toutes les notifications
+          </Link>
         </div>
       )}
     </div>

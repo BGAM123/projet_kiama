@@ -47,11 +47,25 @@ public class FileIngestionService {
     }
 
     public StoredFile ingest(MultipartFile file) {
+        return ingest(file, true);
+    }
+
+    /**
+     * @param extractText faux pour un appelant qui n'utilisera jamais {@code
+     *                     StoredFile#rawText()} (ex. import direct d'un .docx
+     *                     dans l'éditeur, reparsé intégralement par {@code
+     *                     DocxHtmlImporter}) — évite de parser le fichier une
+     *                     seconde fois côté Tika pour un texte qui serait
+     *                     immédiatement jeté.
+     */
+    public StoredFile ingest(MultipartFile file, boolean extractText) {
         String originalName = FileNames.sanitize(file.getOriginalFilename());
         validate(file, originalName);
 
         byte[] content = readBytes(file);
-        ExtractedText extracted = textExtractionService.extract(content);
+        ExtractedText extracted = extractText
+                ? textExtractionService.extract(content)
+                : textExtractionService.detectMimeType(content);
 
         String objectKey = "sources/" + UUID.randomUUID() + "/" + originalName;
         objectStorageService.upload(minioProperties.getBucketSources(), objectKey, content, extracted.mimeType());

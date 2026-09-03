@@ -125,7 +125,7 @@ app/
     editor/[id]/        # Éditeur TipTap + export
     history/            # Historique
     notifications/      # Notifications
-    admin/              # users, roles, ai-models, audit
+    admin/              # users, roles, ai-models
   login/                # Connexion
   access-denied/        # Accès refusé (rôle insuffisant)
 components/             # Composants partagés + ui/ (shadcn)

@@ -1,5 +1,6 @@
 'use client';
 
+import { useMemo } from 'react';
 import { Bell, Check, X } from 'lucide-react';
 import { PageHeader } from '@/components/page-header';
 import { Card, CardContent } from '@/components/ui/card';
@@ -8,13 +9,16 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useNotifications } from '@/lib/hooks/queries';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { markNotificationRead } from '@/lib/api/client';
-import { relativeTime } from '@/lib/format';
+import { formatDateTime, relativeTime } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { Notification } from '@/types';
 
 export default function NotificationsPage() {
   const { data: notifications, isLoading } = useNotifications();
   const qc = useQueryClient();
+
+  const total = notifications?.length ?? 0;
+  const unread = useMemo(() => (notifications ?? []).filter((n: Notification) => !n.read).length, [notifications]);
 
   const mark = useMutation({
     mutationFn: async ({ id, read }: { id: string; read: boolean }) => (await markNotificationRead(id, read)).data,
@@ -28,9 +32,16 @@ export default function NotificationsPage() {
     ERROR: 'bg-destructive/15 text-destructive',
   };
 
+  const description = isLoading
+    ? 'Vos alertes et messages système.'
+    : total === 0
+      ? 'Vos alertes et messages système — aucune notification pour le moment.'
+      : `Vos alertes et messages système — ${total} notification${total > 1 ? 's' : ''}` +
+        (unread > 0 ? `, dont ${unread} non lue${unread > 1 ? 's' : ''}.` : ', toutes lues.');
+
   return (
     <div className="mx-auto max-w-3xl space-y-6 p-6 lg:p-8">
-      <PageHeader title="Notifications" description="Vos alertes et messages système." icon={Bell} />
+      <PageHeader title="Notifications" description={description} icon={Bell} />
       <Card>
         <CardContent className="p-0">
           {isLoading ? (
@@ -47,7 +58,9 @@ export default function NotificationsPage() {
                   <span className={cn('mt-1.5 h-2.5 w-2.5 flex-none rounded-full', toneByType[n.type])} />
                   <div className="min-w-0 flex-1">
                     <p className="text-sm leading-snug">{n.content}</p>
-                    <p className="mt-1 text-xs text-muted-foreground">{relativeTime(n.createdAt)}</p>
+                    <p className="mt-1 text-xs text-muted-foreground" title={relativeTime(n.createdAt)}>
+                      Envoyée le {formatDateTime(n.createdAt)}
+                    </p>
                   </div>
                   <Button variant="ghost" size="icon" className="h-7 w-7 flex-none" aria-label={n.read ? 'Marquer non lue' : 'Marquer lue'} onClick={() => mark.mutate({ id: n.id, read: !n.read })}>
                     {n.read ? <X className="h-3.5 w-3.5" /> : <Check className="h-3.5 w-3.5" />}

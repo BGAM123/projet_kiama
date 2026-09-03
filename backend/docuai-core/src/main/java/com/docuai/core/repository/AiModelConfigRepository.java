@@ -16,4 +16,6 @@ public interface AiModelConfigRepository extends JpaRepository<AiModelConfig, UU
     List<AiModelConfig> findByFournisseurAndActifTrue(String fournisseur);
 
     List<AiModelConfig> findByActifTrue();
+
+    List<AiModelConfig> findByEstDefautTrueAndIdNot(UUID id);
 }

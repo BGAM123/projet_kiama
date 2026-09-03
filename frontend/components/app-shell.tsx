@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
 import {
+  Bell,
   Bot,
   FileText,
   FolderTree,
@@ -13,7 +14,6 @@ import {
   ListChecks,
   LogOut,
   Menu,
-  ScrollText,
   Settings,
   Sparkles,
   Users,
@@ -21,6 +21,8 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/lib/auth-store';
+import { useNotifications } from '@/lib/hooks/queries';
+import type { Notification } from '@/types';
 import { Button } from '@/components/ui/button';
 import { NotificationsBell } from '@/components/notifications-bell';
 import { ThemeToggle } from '@/components/theme-toggle';
@@ -47,10 +49,10 @@ const navItems: NavItem[] = [
   { href: '/documents-types', label: 'Documents Types', icon: FileText },
   { href: '/documents/new', label: 'Nouveau document', icon: Bot },
   { href: '/history', label: 'Historique', icon: History },
+  { href: '/notifications', label: 'Notifications', icon: Bell },
   { href: '/admin/categories', label: 'Catégories', icon: FolderTree, requireAdmin: true },
   { href: '/admin/users', label: 'Utilisateurs', icon: Users, requireAdmin: true },
   { href: '/admin/ai-models', label: 'Modèles IA', icon: Sparkles, requireAdmin: true },
-  { href: '/admin/audit', label: 'Journal d\'activité', icon: ScrollText, requireAdmin: true },
 ];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -64,6 +66,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const items = useMemo(
     () => navItems.filter((i) => !i.requireAdmin || hasRole('ADMIN')),
     [hasRole],
+  );
+
+  const { data: notifications } = useNotifications();
+  const unreadCount = useMemo(
+    () => (notifications ?? []).filter((n: Notification) => !n.read).length,
+    [notifications],
   );
 
   if (!session) return null;
@@ -110,7 +118,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   active ? 'text-primary-foreground' : 'text-muted-foreground group-hover:text-accent-foreground',
                 )}
               />
-              {item.label}
+              <span className="flex-1">{item.label}</span>
+              {item.href === '/notifications' && unreadCount > 0 && (
+                <span
+                  className={cn(
+                    'flex h-5 min-w-5 flex-none items-center justify-center rounded-full px-1 text-[11px] font-bold',
+                    active ? 'bg-primary-foreground/20 text-primary-foreground' : 'bg-destructive text-destructive-foreground',
+                  )}
+                >
+                  {unreadCount}
+                </span>
+              )}
             </Link>
           );
         })}

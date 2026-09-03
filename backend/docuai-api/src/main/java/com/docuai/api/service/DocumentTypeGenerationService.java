@@ -8,6 +8,7 @@ import com.docuai.ai.service.SkeletonContentGuard;
 import com.docuai.ai.service.SkeletonResponseParser;
 import com.docuai.api.dto.DocumentTypeDTO;
 import com.docuai.api.dto.GenerateDocumentTypeRequest;
+import com.docuai.api.event.DocumentTypeGenerationCompletedEvent;
 import com.docuai.api.exception.NotFoundException;
 import com.docuai.api.mapper.DocumentTypeMapper;
 import com.docuai.core.model.Categorie;
@@ -21,6 +22,7 @@ import com.docuai.core.repository.DocumentStructureRepository;
 import com.docuai.core.repository.DocumentTypeRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -59,6 +61,7 @@ public class DocumentTypeGenerationService {
     private final SkeletonResponseParser skeletonResponseParser;
     private final SkeletonContentGuard skeletonContentGuard;
     private final DocumentTypeContextCacheService documentTypeContextCacheService;
+    private final ApplicationEventPublisher eventPublisher;
 
     public DocumentTypeGenerationService(DocumentTypeRepository documentTypeRepository,
                                           DocumentStructureRepository documentStructureRepository,
@@ -68,7 +71,8 @@ public class DocumentTypeGenerationService {
                                           PromptBuilder promptBuilder,
                                           SkeletonResponseParser skeletonResponseParser,
                                           SkeletonContentGuard skeletonContentGuard,
-                                          DocumentTypeContextCacheService documentTypeContextCacheService) {
+                                          DocumentTypeContextCacheService documentTypeContextCacheService,
+                                          ApplicationEventPublisher eventPublisher) {
         this.documentTypeRepository = documentTypeRepository;
         this.documentStructureRepository = documentStructureRepository;
         this.categorieRepository = categorieRepository;
@@ -78,6 +82,7 @@ public class DocumentTypeGenerationService {
         this.skeletonResponseParser = skeletonResponseParser;
         this.skeletonContentGuard = skeletonContentGuard;
         this.documentTypeContextCacheService = documentTypeContextCacheService;
+        this.eventPublisher = eventPublisher;
     }
 
     @Transactional
@@ -95,14 +100,21 @@ public class DocumentTypeGenerationService {
                 .build();
         documentType = documentTypeRepository.save(documentType);
 
-        runGeneration(documentType, request.getDescription());
+        boolean quotaExceeded = runGeneration(documentType, request.getDescription());
 
-        return documentTypeMapper.toDto(documentTypeRepository.save(documentType));
+        documentType = documentTypeRepository.save(documentType);
+        eventPublisher.publishEvent(new DocumentTypeGenerationCompletedEvent(
+                documentType.getId(), currentUser.getId(), documentType.getNom(),
+                documentType.getStatut() == DocumentTypeStatut.STRUCTURE_EXTRAITE, quotaExceeded));
+
+        return documentTypeMapper.toDto(documentType);
     }
 
-    private void runGeneration(DocumentType documentType, String description) {
+    /** @return vrai si au moins une tentative a échoué avec un quota/rate limit IA dépassé (HTTP 429). */
+    private boolean runGeneration(DocumentType documentType, String description) {
         String baseSystemPrompt = promptBuilder.buildSkeletonSystemPrompt(description);
         List<String> lastViolations = List.of();
+        boolean quotaExceeded = false;
 
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
             String systemPrompt = lastViolations.isEmpty()
@@ -121,12 +133,15 @@ public class DocumentTypeGenerationService {
                 if (validation.valid()) {
                     persistStructure(documentType, tree);
                     documentType.setStatut(DocumentTypeStatut.STRUCTURE_EXTRAITE);
-                    return;
+                    return false;
                 }
                 log.warn("Squelette IA non conforme pour le document type {} (tentative {}/{}) : {}",
                         documentType.getId(), attempt, MAX_ATTEMPTS, validation.violations());
                 lastViolations = validation.violations();
             } catch (SkeletonResponseParser.SkeletonParseException | AiProviderException e) {
+                if (e instanceof AiProviderException aiException && aiException.isQuotaExceeded()) {
+                    quotaExceeded = true;
+                }
                 log.warn("Échec de génération de squelette IA pour le document type {} (tentative {}/{}) : {}",
                         documentType.getId(), attempt, MAX_ATTEMPTS, e.getMessage());
                 lastViolations = List.of(e.getMessage() == null ? "erreur inconnue" : e.getMessage());
@@ -134,6 +149,7 @@ public class DocumentTypeGenerationService {
         }
 
         documentType.setStatut(DocumentTypeStatut.ECHEC_EXTRACTION);
+        return quotaExceeded;
     }
 
     /** Même convention que {@code DocumentTypeExtractionService} : un nœud "cover" préfixe systématiquement l'arbre. */

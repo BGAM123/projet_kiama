@@ -42,8 +42,13 @@ export default function AdminAiModelsPage() {
   });
 
   function toggleActive(c: AiModelConfig) {
-    update.mutate({ id: c.id, patch: { active: !c.active } });
-    toast.success(`${providerLabel[c.provider]} ${c.active ? 'désactivé' : 'activé'}.`);
+    update.mutate(
+      { id: c.id, patch: { active: !c.active } },
+      {
+        onSuccess: () => toast.success(`${providerLabel[c.provider]} ${c.active ? 'désactivé' : 'activé'}.`),
+        onError: (e: Error) => toast.error(`Impossible de ${c.active ? 'désactiver' : 'activer'} ${providerLabel[c.provider]}`, { description: e.message }),
+      },
+    );
   }
 
   function setDefault(c: AiModelConfig) {
@@ -76,6 +81,7 @@ export default function AdminAiModelsPage() {
           toast.success('Configuration enregistrée.');
           setEditing(null);
         },
+        onError: (e: Error) => toast.error("Impossible d'enregistrer la configuration", { description: e.message }),
       },
     );
   }

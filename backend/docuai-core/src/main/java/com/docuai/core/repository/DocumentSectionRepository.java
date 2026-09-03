@@ -11,4 +11,6 @@ import java.util.UUID;
 public interface DocumentSectionRepository extends JpaRepository<DocumentSection, UUID> {
 
     List<DocumentSection> findByDocument_IdOrderByOrderIndexAsc(UUID documentId);
+
+    List<DocumentSection> findByDocument_IdInOrderByOrderIndexAsc(List<UUID> documentIds);
 }

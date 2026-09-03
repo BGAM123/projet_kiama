@@ -71,7 +71,7 @@ docuai-parent/                          (pom.xml — packaging "pom", BOM intern
         ├── DocuAiApplication.java      point d'entrée Spring Boot
         ├── controller/                 auth, user, role, category, documenttype,
         │                               conversation, generation, aiconfig, dashboard,
-        │                               admin (audit), notification
+        │                               notification
         ├── service/                    Services applicatifs (orchestration/transactions,
         │                               un par domaine ci-dessus)
         ├── dto/                        DTO d'API (jamais d'entité JPA exposée directement)

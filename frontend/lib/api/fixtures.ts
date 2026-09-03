@@ -1,6 +1,5 @@
 import type {
   AiModelConfig,
-  AuditLogEntry,
   Category,
   Conversation,
   DocumentStructure,
@@ -20,7 +19,6 @@ export const permissions: Permission[] = [
   { id: 'p4', code: 'user:manage', description: 'Gérer les utilisateurs' },
   { id: 'p5', code: 'role:manage', description: 'Gérer les rôles et permissions' },
   { id: 'p6', code: 'ai_config:manage', description: 'Configurer les modèles IA' },
-  { id: 'p7', code: 'audit:read', description: 'Consulter le journal d\'activité' },
   { id: 'p8', code: 'category:manage', description: 'Gérer les catégories' },
 ];
 
@@ -222,19 +220,6 @@ export const aiModelConfigs: AiModelConfig[] = [
   { id: 'ai4', provider: 'MISTRAL', modelName: 'mistral-large', apiKeyRef: 'MISTRAL_API_KEY', hasStoredApiKey: false, apiKeyPreview: null, isDefault: false, active: false },
   { id: 'ai5', provider: 'OLLAMA', modelName: 'llama3.1:70b', apiKeyRef: '—', hasStoredApiKey: false, apiKeyPreview: null, isDefault: false, active: false },
   { id: 'ai6', provider: 'DEEPSEEK', modelName: 'deepseek-chat', apiKeyRef: 'DEEPSEEK_API_KEY', hasStoredApiKey: false, apiKeyPreview: null, isDefault: false, active: false },
-];
-
-export const auditLogs: AuditLogEntry[] = [
-  { id: 'a1', userId: 'u1', userName: 'Sophie Lambert', action: 'CREATE', entityType: 'DocumentType', entityId: 'dt4', timestamp: '2026-07-20T10:05:00Z', ipAddress: '10.0.0.12' },
-  { id: 'a2', userId: 'u1', userName: 'Sophie Lambert', action: 'LOGIN', entityType: 'Auth', entityId: 'u1', timestamp: '2026-07-27T08:30:00Z', ipAddress: '10.0.0.12' },
-  { id: 'a3', userId: 'u2', userName: 'Thomas Moreau', action: 'GENERATE', entityType: 'GeneratedDocument', entityId: 'gd1', timestamp: '2026-07-02T09:18:00Z', ipAddress: '10.0.0.45' },
-  { id: 'a4', userId: 'u2', userName: 'Thomas Moreau', action: 'EXPORT', entityType: 'GeneratedDocument', entityId: 'gd1', timestamp: '2026-07-02T09:25:00Z', ipAddress: '10.0.0.45' },
-  { id: 'a5', userId: 'u1', userName: 'Sophie Lambert', action: 'UPDATE', entityType: 'AiModelConfig', entityId: 'ai1', timestamp: '2026-07-18T14:10:00Z', ipAddress: '10.0.0.12' },
-  { id: 'a6', userId: 'u3', userName: 'Claire Dubois', action: 'CREATE', entityType: 'Conversation', entityId: 'cv5', timestamp: '2026-07-15T11:30:00Z', ipAddress: '10.0.0.51' },
-  { id: 'a7', userId: 'u2', userName: 'Thomas Moreau', action: 'LOGIN', entityType: 'Auth', entityId: 'u2', timestamp: '2026-07-22T09:00:00Z', ipAddress: '10.0.0.45' },
-  { id: 'a8', userId: 'u1', userName: 'Sophie Lambert', action: 'UPDATE', entityType: 'User', entityId: 'u4', timestamp: '2026-07-19T17:00:00Z', ipAddress: '10.0.0.12' },
-  { id: 'a9', userId: 'u2', userName: 'Thomas Moreau', action: 'GENERATE', entityType: 'GeneratedDocument', entityId: 'gd3', timestamp: '2026-07-12T16:22:00Z', ipAddress: '10.0.0.45' },
-  { id: 'a10', userId: 'u1', userName: 'Sophie Lambert', action: 'IMPORT', entityType: 'DocumentType', entityId: 'dt4', timestamp: '2026-07-20T10:02:00Z', ipAddress: '10.0.0.12' },
 ];
 
 export const notifications: Notification[] = [

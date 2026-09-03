@@ -63,11 +63,9 @@ public class AiConfigService {
             // (est_defaut=FALSE) au commit — deux lignes à TRUE en même temps,
             // ce qui viole l'index unique partiel ux_ai_model_config_defaut
             // (un seul fournisseur par défaut à la fois, cf. V1__init_schema.sql).
-            aiModelConfigRepository.findAll().forEach(other -> {
-                if (!other.getId().equals(id) && Boolean.TRUE.equals(other.getEstDefaut())) {
-                    other.setEstDefaut(false);
-                    aiModelConfigRepository.saveAndFlush(other);
-                }
+            aiModelConfigRepository.findByEstDefautTrueAndIdNot(id).forEach(other -> {
+                other.setEstDefaut(false);
+                aiModelConfigRepository.saveAndFlush(other);
             });
             config.setEstDefaut(true);
         } else if (request.getIsDefault() != null) {

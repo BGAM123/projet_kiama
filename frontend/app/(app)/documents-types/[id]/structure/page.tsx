@@ -57,7 +57,6 @@ export default function StructurePreviewPage() {
 
   const [tree, setTree] = useState<StructureNode[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [draftLabel, setDraftLabel] = useState('');
 
   useEffect(() => {
     if (structure) setTree(structure.tree);
@@ -127,13 +126,10 @@ export default function StructurePreviewPage() {
 
   function startEdit(node: StructureNode) {
     setEditingId(node.id);
-    setDraftLabel(node.label);
   }
 
-  function commitEdit() {
-    if (editingId) {
-      setTree(updateNode(editingId, { label: draftLabel || 'Sans titre' }));
-    }
+  function commitEdit(id: string, label: string) {
+    setTree(updateNode(id, { label: label || 'Sans titre' }));
     setEditingId(null);
   }
 
@@ -206,9 +202,7 @@ export default function StructurePreviewPage() {
                     node={node}
                     depth={0}
                     editingId={editingId}
-                    draftLabel={draftLabel}
                     onEdit={startEdit}
-                    onDraft={setDraftLabel}
                     onCommit={commitEdit}
                     onRemove={(id) => setTree(removeNode(id))}
                     onAddChild={addChild}
@@ -249,9 +243,7 @@ function TreeRow({
   node,
   depth,
   editingId,
-  draftLabel,
   onEdit,
-  onDraft,
   onCommit,
   onRemove,
   onAddChild,
@@ -259,17 +251,22 @@ function TreeRow({
   node: StructureNode;
   depth: number;
   editingId: string | null;
-  draftLabel: string;
   onEdit: (n: StructureNode) => void;
-  onDraft: (s: string) => void;
-  onCommit: () => void;
+  onCommit: (id: string, label: string) => void;
   onRemove: (id: string) => void;
   onAddChild: (parentId: string | null) => void;
 }) {
   const [expanded, setExpanded] = useState(true);
+  // État local au champ édité : évite de faire remonter chaque frappe dans
+  // l'état du parent, ce qui re-rendrait tout l'arbre à chaque caractère.
+  const [draft, setDraft] = useState(node.label);
   const Icon = nodeIcon[node.type];
   const hasChildren = !!node.children?.length;
   const isEditing = editingId === node.id;
+
+  useEffect(() => {
+    if (isEditing) setDraft(node.label);
+  }, [isEditing, node.label]);
 
   return (
     <li>
@@ -289,10 +286,10 @@ function TreeRow({
         {isEditing ? (
           <Input
             autoFocus
-            value={draftLabel}
-            onChange={(e) => onDraft(e.target.value)}
-            onBlur={onCommit}
-            onKeyDown={(e) => e.key === 'Enter' && onCommit()}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={() => onCommit(node.id, draft)}
+            onKeyDown={(e) => e.key === 'Enter' && onCommit(node.id, draft)}
             className="h-7 flex-1"
           />
         ) : (
@@ -322,9 +319,7 @@ function TreeRow({
               node={c}
               depth={depth + 1}
               editingId={editingId}
-              draftLabel={draftLabel}
               onEdit={onEdit}
-              onDraft={onDraft}
               onCommit={onCommit}
               onRemove={onRemove}
               onAddChild={onAddChild}

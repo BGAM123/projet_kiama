@@ -2,6 +2,8 @@ package com.docuai.core.model;
 
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.Fetch;
+import org.hibernate.annotations.FetchMode;
 
 import java.time.LocalDateTime;
 import java.util.HashSet;
@@ -44,6 +46,7 @@ public class Utilisateur {
     private LocalDateTime dateCreation = LocalDateTime.now();
 
     @ManyToMany(fetch = FetchType.EAGER)
+    @Fetch(FetchMode.SUBSELECT)
     @JoinTable(
         name = "utilisateur_role",
         joinColumns = @JoinColumn(name = "id_utilisateur"),

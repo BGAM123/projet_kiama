@@ -17,4 +17,6 @@ public interface DocumentReferenceRepository extends JpaRepository<DocumentRefer
     List<DocumentReference> findByDocument_IdOrderByDateImportAsc(UUID documentId);
 
     long countByDocument_Id(UUID documentId);
+
+    List<DocumentReference> findByDocument_IdIn(List<UUID> documentIds);
 }

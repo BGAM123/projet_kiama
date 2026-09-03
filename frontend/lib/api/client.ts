@@ -6,7 +6,7 @@
 // import/ré-extraction/validation, Bloc 4), upload/extraction bas niveau,
 // conversations/messages/documents de référence + générations/streaming
 // (Bloc 6), export DOCX/PDF/Markdown, dashboard et configurations IA
-// (Bloc 7/8), notifications, audit logs.
+// (Bloc 7/8), notifications.
 //
 // Chaque fonction garde une signature stable pour que les hooks React Query
 // et les composants qui les consomment n'aient pas à changer.
@@ -16,7 +16,6 @@ import type {
   AiModelConfig,
   UpdateAiConfigPayload,
   AppDocument,
-  AuditLogEntry,
   AuthSession,
   Category,
   Conversation,
@@ -601,21 +600,25 @@ export async function createConversation(input: { userId: string; documentTypeId
 export async function listMessages(conversationId: string): Promise<ApiSuccess<Message[]>> {
   try {
     const pageSize = 200;
-    const all: BackendMessageDTO[] = [];
-    let page = 0;
-    for (;;) {
-      const res = await http.get<{ data: BackendMessageDTO[]; meta?: { totalPages?: number } }>(
-        `/conversations/${conversationId}/messages`,
-        { params: { page, size: pageSize } },
+    type PageResponse = { data: BackendMessageDTO[]; meta?: { totalPages?: number } };
+    const fetchPage = (page: number) =>
+      http.get<PageResponse>(`/conversations/${conversationId}/messages`, { params: { page, size: pageSize } });
+
+    const first = await fetchPage(0);
+    const totalPages = first.data.meta?.totalPages ?? 1;
+    const pages: BackendMessageDTO[][] = [first.data.data];
+
+    if (totalPages > 1 && first.data.data.length > 0) {
+      // Page 0 confirme qu'il y a des données et fixe totalPages : les pages
+      // restantes sont indépendantes, on les récupère en parallèle plutôt
+      // qu'en enchaînant les allers-retours séquentiellement.
+      const rest = await Promise.all(
+        Array.from({ length: totalPages - 1 }, (_, i) => fetchPage(i + 1).then((res) => res.data.data)),
       );
-      all.push(...res.data.data);
-      const totalPages = res.data.meta?.totalPages ?? 1;
-      page += 1;
-      if (page >= totalPages || res.data.data.length === 0) {
-        break;
-      }
+      pages.push(...rest);
     }
-    return ok(all.map(adaptMessageDTO));
+
+    return ok(pages.flat().map(adaptMessageDTO));
   } catch (e) {
     throw toApiError(e, `/api/v1/conversations/${conversationId}/messages`);
   }
@@ -1006,46 +1009,8 @@ export async function getDashboardStats(userId: string): Promise<ApiSuccess<Dash
 }
 
 // ---------------------------------------------------------------------------
-// Audit logs & notifications — branchés sur le backend réel.
+// Notifications — branchées sur le backend réel.
 // ---------------------------------------------------------------------------
-
-interface BackendActivityLog {
-  id: string;
-  userId: string | null;
-  action: string;
-  typeEntite: string | null;
-  idEntite: string | null;
-  dateAction: string;
-  adresseIp: string | null;
-}
-
-function adaptActivityLog(log: BackendActivityLog): AuditLogEntry {
-  return {
-    id: log.id,
-    userId: log.userId ?? '',
-    // Le backend ne joint pas le nom de l'utilisateur sur journal_activite —
-    // seul l'id est disponible. Amélioration possible côté backend (jointure
-    // ou dénormalisation), hors périmètre de cette itération.
-    userName: '',
-    action: log.action,
-    entityType: log.typeEntite ?? '',
-    entityId: log.idEntite ?? '',
-    timestamp: log.dateAction,
-    ipAddress: log.adresseIp ?? '',
-  };
-}
-
-export async function listAuditLogs(): Promise<ApiSuccess<AuditLogEntry[]>> {
-  try {
-    // GET /api/v1/admin/logs (pas /api/v1/audit-logs comme prévu côté mock) —
-    // renvoie les 10 dernières entrées seulement, pas de pagination serveur
-    // pour l'instant (écart 1.11 / 10.1 du rapport).
-    const res = await http.get<{ data: BackendActivityLog[] }>('/admin/logs');
-    return ok(res.data.data.map(adaptActivityLog));
-  } catch (e) {
-    throw toApiError(e, '/api/v1/admin/logs');
-  }
-}
 
 interface BackendNotification {
   id: string;

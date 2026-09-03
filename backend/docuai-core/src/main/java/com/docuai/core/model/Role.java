@@ -2,6 +2,8 @@ package com.docuai.core.model;
 
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.Fetch;
+import org.hibernate.annotations.FetchMode;
 
 import java.util.HashSet;
 import java.util.Set;
@@ -29,6 +31,7 @@ public class Role {
     private String description;
 
     @ManyToMany(fetch = FetchType.EAGER)
+    @Fetch(FetchMode.SUBSELECT)
     @JoinTable(
         name = "role_permission",
         joinColumns = @JoinColumn(name = "id_role"),

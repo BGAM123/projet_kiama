@@ -107,7 +107,11 @@ export default function DocumentTypesPage() {
       });
   }, [documentTypes, categoryFilter, statusFilter, search, sortKey, sortDir]);
 
-  const catName = (id: string) => categories?.find((c: Category) => c.id === id)?.name ?? '—';
+  const categoriesById = useMemo(
+    () => new Map<string, Category>((categories ?? []).map((c: Category) => [c.id, c])),
+    [categories],
+  );
+  const catName = (id: string) => categoriesById.get(id)?.name ?? '—';
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) {

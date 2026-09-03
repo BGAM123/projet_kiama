@@ -75,9 +75,7 @@ public class RoleService {
     @Transactional
     public void delete(UUID id) {
         Role role = findEntity(id);
-        boolean inUse = utilisateurRepository.findAll().stream()
-                .anyMatch(u -> u.getRoles().contains(role));
-        if (inUse) {
+        if (utilisateurRepository.existsByRolesContaining(role)) {
             throw BusinessException.conflict("ROLE_IN_USE", "Ce rôle est assigné à au moins un utilisateur et ne peut pas être supprimé.");
         }
         roleRepository.deleteById(id);
@@ -85,10 +83,13 @@ public class RoleService {
 
     private Set<Permission> resolvePermissions(List<UUID> permissionIds) {
         if (permissionIds == null) return new HashSet<>();
-        return permissionIds.stream()
-                .map(id -> permissionRepository.findById(id)
-                        .orElseThrow(() -> new NotFoundException("PERMISSION_NOT_FOUND", "Permission introuvable : " + id)))
-                .collect(Collectors.toSet());
+        List<Permission> found = permissionRepository.findAllById(permissionIds);
+        if (found.size() != new HashSet<>(permissionIds).size()) {
+            Set<UUID> foundIds = found.stream().map(Permission::getId).collect(Collectors.toSet());
+            UUID missing = permissionIds.stream().filter(id -> !foundIds.contains(id)).findFirst().orElseThrow();
+            throw new NotFoundException("PERMISSION_NOT_FOUND", "Permission introuvable : " + missing);
+        }
+        return new HashSet<>(found);
     }
 
     private Role findEntity(UUID id) {

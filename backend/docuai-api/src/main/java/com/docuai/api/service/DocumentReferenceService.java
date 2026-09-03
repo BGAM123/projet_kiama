@@ -116,8 +116,9 @@ public class DocumentReferenceService {
     private void indexForRag(DocumentReference reference, String rawText) {
         try {
             List<DocumentChunk> chunks = chunkingService.chunk(reference.getId(), rawText);
-            for (DocumentChunk chunk : chunks) {
-                chunk.setEmbedding(embeddingService.embed(chunk.getContenu()));
+            List<float[]> embeddings = embeddingService.embedAll(chunks.stream().map(DocumentChunk::getContenu).toList());
+            for (int i = 0; i < chunks.size(); i++) {
+                chunks.get(i).setEmbedding(embeddings.get(i));
             }
             documentChunkRepository.saveAll(chunks);
         } catch (Exception e) {

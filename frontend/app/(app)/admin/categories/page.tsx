@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { useForm } from 'react-hook-form';
@@ -123,7 +123,14 @@ export default function AdminCategoriesPage() {
     else createMutation.mutate(v);
   });
 
-  const countFor = (categoryId: string) => documentTypes?.filter((d: DocumentType) => d.categoryId === categoryId).length ?? 0;
+  const documentTypeCountByCategory = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const d of documentTypes ?? []) {
+      counts.set(d.categoryId, (counts.get(d.categoryId) ?? 0) + 1);
+    }
+    return counts;
+  }, [documentTypes]);
+  const countFor = (categoryId: string) => documentTypeCountByCategory.get(categoryId) ?? 0;
   const pending = createMutation.isPending || editMutation.isPending;
 
   return (

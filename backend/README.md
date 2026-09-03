@@ -208,12 +208,12 @@ Voir `ARCHITECTURE.md` pour le détail de l'arborescence proposée.
       `estDefaut=false` sur les autres configurations. Aucune migration
       Flyway nécessaire (permissions déjà seedées en V2).
       Notifications (`/api/v1/notifications/user/{userId}`, `PUT
-      .../read`) et lecture du journal d'activité (`GET /admin/logs`)
-      existaient déjà avant cette session, non retouchées ici. **Limitations
-      connues** : `journal_activite` n'a toujours aucun writer (la table
-      reste vide en usage réel, rien n'y insère de ligne) et `GET
-      /admin/logs` reste limité aux 10 dernières entrées sans pagination
-      serveur ; la sélection du fournisseur IA par défaut configurée via
+      .../read`) existaient déjà avant cette session, non retouchées ici.
+      Le "journal d'activité" (table `journal_activite`, permission
+      `AUDIT_LOG_READ`) n'a jamais eu de writer/reader applicatif — retiré
+      intégralement (backend + frontend + `V16__remove_audit_log.sql`) plutôt
+      que laissé comme fonctionnalité fantôme. **Limitations connues** : la
+      sélection du fournisseur IA par défaut configurée via
       `/ai-configs` n'est pas encore lue par `AiOrchestratorService`
       (toujours OpenAI puis premier disponible, cf. Bloc 5).
       **Backend non compilé dans cette session** (pas de `mvn`/JDK 21/Docker

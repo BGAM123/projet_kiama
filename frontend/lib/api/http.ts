@@ -2,7 +2,7 @@
 // les fonctions mock de lib/api/client.ts (voir commentaire en tête de ce
 // fichier). Périmètre connecté à ce stade : auth, users, roles, catégories
 // (Bloc 3), document-types + structure (Bloc 3), upload/extraction, export,
-// notifications, audit logs, conversations/messages/documents de référence
+// notifications, conversations/messages/documents de référence
 // (Bloc 6), générations + streaming SSE (Bloc 6). Le reste (ai-configs,
 // dashboard, export réel) reste mocké faute d'endpoints backend (Blocs 7/8).
 

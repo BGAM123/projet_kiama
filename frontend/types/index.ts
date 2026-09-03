@@ -224,17 +224,6 @@ export interface UpdateAiConfigPayload {
   active?: boolean;
 }
 
-export interface AuditLogEntry {
-  id: string;
-  userId: string;
-  userName: string;
-  action: string;
-  entityType: string;
-  entityId: string;
-  timestamp: string;
-  ipAddress: string;
-}
-
 export interface Notification {
   id: string;
   userId: string;

@@ -1,5 +1,6 @@
 package com.docuai.extraction.text;
 
+import org.apache.tika.Tika;
 import org.apache.tika.exception.TikaException;
 import org.apache.tika.metadata.Metadata;
 import org.apache.tika.parser.AutoDetectParser;
@@ -37,5 +38,17 @@ public class TextExtractionService {
         } catch (IOException | SAXException | TikaException e) {
             throw new TextExtractionException("Impossible d'extraire le contenu de ce fichier — il est peut-être corrompu ou dans un format non supporté.", e);
         }
+    }
+
+    /**
+     * Détection du type MIME seule (magic bytes), sans parser/extraire le
+     * texte — pour un appelant qui n'a besoin que du {@code mimeType} (ex.
+     * upload d'un .docx destiné à {@code DocxHtmlImporter}, qui reparse déjà
+     * le fichier lui-même : lancer {@link #extract} en plus reviendrait à
+     * parser deux fois le même document).
+     */
+    public ExtractedText detectMimeType(byte[] content) {
+        String mimeType = new Tika().detect(content);
+        return new ExtractedText(mimeType != null ? mimeType : "application/octet-stream", "");
     }
 }

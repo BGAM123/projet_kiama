@@ -30,19 +30,24 @@ export default function HistoryPage() {
     [docs],
   );
 
+  const documentTypesById = useMemo(
+    () => new Map<string, DocumentType>((documentTypes ?? []).map((t: DocumentType) => [t.id, t])),
+    [documentTypes],
+  );
+
   const filtered = useMemo(() => {
     return docsList
       .filter((d: AppDocument) => (statusFilter === 'all' ? true : d.status === statusFilter))
       .filter((d: AppDocument) => {
         if (catFilter === 'all') return true;
-        const dt = documentTypes?.find((t: DocumentType) => t.id === d.documentTypeId);
+        const dt = d.documentTypeId ? documentTypesById.get(d.documentTypeId) : undefined;
         return dt?.categoryId === catFilter;
       })
       .filter((d: AppDocument) => {
         if (!search.trim()) return true;
         return (d.title ?? '').toLowerCase().includes(search.toLowerCase());
       });
-  }, [docsList, statusFilter, catFilter, search, documentTypes]);
+  }, [docsList, statusFilter, catFilter, search, documentTypesById]);
 
   return (
     <div className="mx-auto max-w-7xl space-y-6 p-6 lg:p-8">
